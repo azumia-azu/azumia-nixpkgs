@@ -50,13 +50,16 @@
         };
 
       flake = {
-        overlays.default = import ./overlays;
-
-        nixosModules.default = import ./modules/nixos;
-
-        homeManagerModules.default = import ./modules/home-manager;
-
         lib = import ./lib { inherit (nixpkgs) lib; };
+
+        overlays = import ./overlays {
+          inherit (nixpkgs) lib;
+          myLib = self.lib;
+        };
+
+        nixosModules = import ./modules/nixos { myLib = self.lib; };
+
+        homeManagerModules = import ./modules/home-manager { myLib = self.lib; };
       };
     };
 }
