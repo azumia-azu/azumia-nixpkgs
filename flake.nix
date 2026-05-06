@@ -1,0 +1,62 @@
+{
+  description = "My personal nixpkgs-like package source";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-parts.url = "github:hercules-ci/flake-parts";
+  };
+
+  outputs =
+    inputs@{
+      self,
+      nixpkgs,
+      flake-parts,
+      ...
+    }:
+    flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+        "x86_64-darwin"
+      ];
+
+      perSystem =
+        { system, ... }:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ self.overlays.default ];
+          };
+        in
+        {
+          packages = {
+            default = pkgs.ghosttyfetch;
+
+            inherit (pkgs)
+              ghosttyfetch
+              ;
+          };
+
+          devShells.default = pkgs.mkShell {
+            packages = with pkgs; [
+              git
+              nil
+              nixfmt
+              nix-output-monitor
+              zig_0_15
+            ];
+          };
+        };
+
+      flake = {
+        overlays.default = import ./overlays;
+
+        nixosModules.default = import ./modules/nixos;
+
+        homeManagerModules.default = import ./modules/home-manager;
+
+        lib = import ./lib { inherit (nixpkgs) lib; };
+      };
+    };
+}
