@@ -1,5 +1,5 @@
 {
-  description = "My personal nixpkgs-like package source";
+  description = "AzumiA personal nixpkgs-like package source";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
