@@ -4,7 +4,7 @@ AzumiA personal nixpkgs-like package source.
 
 ## Home Manager 使用
 
-这个 flake 提供了 `ghosttyfetch` 的 package、overlay，以及 Home Manager module。
+这个 flake 提供了 `ghosttyfetch`、`toofan` 等 package、overlay，以及 Home Manager / NixOS module。
 
 ### 1. 添加 flake input
 
@@ -47,6 +47,7 @@ azumia-nixpkgs.url = "path:/Users/azumia/Src/azumia-nixpkgs";
 
     modules = [
       inputs.azumia-nixpkgs.homeManagerModules.ghosttyfetch
+      inputs.azumia-nixpkgs.homeManagerModules.toofan
       ./home.nix
     ];
   };
@@ -63,6 +64,21 @@ azumia-nixpkgs.url = "path:/Users/azumia/Src/azumia-nixpkgs";
 
   home-manager.sharedModules = [
     inputs.azumia-nixpkgs.homeManagerModules.ghosttyfetch
+    inputs.azumia-nixpkgs.homeManagerModules.toofan
+  ];
+}
+```
+
+也可以在 NixOS 配置里直接导入 NixOS module：
+
+```nix
+{
+  imports = [
+    inputs.azumia-nixpkgs.nixosModules.toofan
+  ];
+
+  nixpkgs.overlays = [
+    inputs.azumia-nixpkgs.overlays.default
   ];
 }
 ```
@@ -148,3 +164,34 @@ azumia-nixpkgs.url = "path:/Users/azumia/Src/azumia-nixpkgs";
   };
 }
 ```
+
+## Toofan 使用
+
+`toofan` 是终端里的波斯语、阿拉伯语、乌尔都语打字练习工具。
+
+### 1. 直接构建或运行
+
+```sh
+nix build github:azumia-azu/azumia-nixpkgs#toofan
+nix run github:azumia-azu/azumia-nixpkgs#toofan
+```
+
+### 2. Home Manager 启用
+
+```nix
+{
+  programs.toofan.enable = true;
+}
+```
+
+启用后会安装 `toofan`。程序运行时会在 `~/.config/toofan` 下维护配置、练习结果和个人最佳成绩。
+
+### 3. NixOS 启用
+
+```nix
+{
+  programs.toofan.enable = true;
+}
+```
+
+启用后会把 `toofan` 加入 `environment.systemPackages`。
