@@ -35,7 +35,7 @@
 
             inherit (pkgs)
               ghosttyfetch
-              pdmaas
+              pdmaner
               toofan
               ;
           };

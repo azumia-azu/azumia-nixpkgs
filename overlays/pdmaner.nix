@@ -4,8 +4,8 @@ let
   version = "4.9.3";
 in
 {
-  pdmaas = prev.buildNpmPackage {
-    pname = "pdmaas";
+  pdmaner = prev.buildNpmPackage {
+    pname = "pdmaner";
     inherit version;
 
     src = prev.fetchzip {
@@ -35,7 +35,7 @@ in
 
     postPatch = ''
       mkdir -p jre/linux
-      cp ${./pdmaas-package-lock.json} package-lock.json
+      cp ${./pdmaner-package-lock.json} package-lock.json
       substituteInPlace package.json \
         --replace-fail 'electron-builder --mac' 'electron-builder --mac dir' \
         --replace-fail 'electron-builder --linux' 'electron-builder --linux dir'
@@ -44,20 +44,21 @@ in
     installPhase = ''
       runHook preInstall
 
-      mkdir -p "$out/share/pdmaas" "$out/bin"
-      cp app/package.json "$out/share/pdmaas/package.json"
-      cp -R app/build "$out/share/pdmaas/build"
-
-      if [ -d dist ]; then
-        cp -R dist "$out/share/pdmaas/dist"
-      fi
+      mkdir -p "$out/share/pdmaner" "$out/bin"
+      cp app/package.json "$out/share/pdmaner/package.json"
+      cp -R app/build "$out/share/pdmaner/build"
 
       if [ -d dist/mac-arm64 ]; then
-        makeWrapper "$out/share/pdmaas/dist/mac-arm64/PDManer.app/Contents/MacOS/PDManer" "$out/bin/pdmaas"
+        mkdir -p "$out/Applications"
+        cp -R dist/mac-arm64/PDManer.app "$out/Applications/PDManer.app"
+        makeWrapper "$out/Applications/PDManer.app/Contents/MacOS/PDManer" "$out/bin/pdmaner"
       elif [ -d dist/mac ]; then
-        makeWrapper "$out/share/pdmaas/dist/mac/PDManer.app/Contents/MacOS/PDManer" "$out/bin/pdmaas"
+        mkdir -p "$out/Applications"
+        cp -R dist/mac/PDManer.app "$out/Applications/PDManer.app"
+        makeWrapper "$out/Applications/PDManer.app/Contents/MacOS/PDManer" "$out/bin/pdmaner"
       else
-        makeWrapper "$out/share/pdmaas/dist/linux-unpacked/PDManer" "$out/bin/pdmaas"
+        cp -R dist "$out/share/pdmaner/dist"
+        makeWrapper "$out/share/pdmaner/dist/linux-unpacked/PDManer" "$out/bin/pdmaner"
       fi
 
       runHook postInstall
@@ -68,7 +69,7 @@ in
       homepage = "https://gitee.com/robergroup/pdmaner";
       license = prev.lib.licenses.agpl3Only;
       maintainers = [ ];
-      mainProgram = "pdmaas";
+      mainProgram = "pdmaner";
       platforms = prev.lib.platforms.linux ++ prev.lib.platforms.darwin;
     };
   };

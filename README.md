@@ -196,13 +196,13 @@ nix run github:azumia-azu/azumia-nixpkgs#toofan
 
 启用后会把 `toofan` 加入 `environment.systemPackages`。
 
-## PDMaas / PDManer 使用
+## PDManer 使用
 
-`pdmaas` 打包自 Gitee 上游 `robergroup/pdmaner`，当前版本为 `4.9.3`。
+`pdmaner` 打包自 Gitee 上游 `robergroup/pdmaner`，当前版本为 `4.9.3`。
 
 ```sh
-nix build github:azumia-azu/azumia-nixpkgs#pdmaas
-nix run github:azumia-azu/azumia-nixpkgs#pdmaas
+nix build github:azumia-azu/azumia-nixpkgs#pdmaner
+nix run github:azumia-azu/azumia-nixpkgs#pdmaner
 ```
 
-上游发布源码不包含 `package-lock.json`，仓库内的 `overlays/pdmaas-package-lock.json` 用于固定 npm 依赖，更新 `pdmaas` 时需要同步重新生成。
+上游发布源码不包含 `package-lock.json`，仓库内的 `overlays/pdmaner-package-lock.json` 用于固定 npm 依赖，更新 `pdmaner` 时需要同步重新生成。
