@@ -1,21 +1,19 @@
 final: prev:
 
 let
-  electron = prev.electron;
+  version = "4.9.3";
 in
 {
   pdmaas = prev.buildNpmPackage {
     pname = "pdmaas";
-    version = "2.1.6-unstable-2025-09-07";
+    inherit version;
 
-    src = prev.fetchFromGitHub {
-      owner = "yonsum";
-      repo = "PDMaas";
-      rev = "876a3f5e556a53e06ea3f9693e6914e1af55a364";
-      hash = "sha256-idN/gOGQSp6E0PtGODiVH1JpYonoNQqeB1NkGmxkW4c=";
+    src = prev.fetchzip {
+      url = "https://gitee.com/robergroup/pdmaner/repository/archive/v${version}.tar.gz";
+      hash = "sha256-MsIKXREFvIny+RTCPdcmD/riF7em2whJwtfxw52+BTs=";
     };
 
-    npmDepsHash = "sha256-k9C9iAgy7AZrCWcE0QYEJrk1IjAOX6n9BKcQz8llgm0=";
+    npmDepsHash = "sha256-HnAWKq2iy5a2U1xilYxzrgmFN7VnWQNGGM5tZ2CNheY=";
     npmDepsFetcherVersion = 2;
 
     nativeBuildInputs = [
@@ -37,6 +35,7 @@ in
 
     postPatch = ''
       mkdir -p jre/linux
+      cp ${./pdmaas-package-lock.json} package-lock.json
       substituteInPlace package.json \
         --replace-fail 'electron-builder --mac' 'electron-builder --mac dir' \
         --replace-fail 'electron-builder --linux' 'electron-builder --linux dir'
@@ -53,22 +52,24 @@ in
         cp -R dist "$out/share/pdmaas/dist"
       fi
 
-      mkdir -p "$out/share/pdmaas/node_modules/@electron"
-      cp -R node_modules/@electron/remote "$out/share/pdmaas/node_modules/@electron/remote"
-
-      makeWrapper ${electron}/bin/electron "$out/bin/pdmaas" \
-        --add-flags "$out/share/pdmaas"
+      if [ -d dist/mac-arm64 ]; then
+        makeWrapper "$out/share/pdmaas/dist/mac-arm64/PDManer.app/Contents/MacOS/PDManer" "$out/bin/pdmaas"
+      elif [ -d dist/mac ]; then
+        makeWrapper "$out/share/pdmaas/dist/mac/PDManer.app/Contents/MacOS/PDManer" "$out/bin/pdmaas"
+      else
+        makeWrapper "$out/share/pdmaas/dist/linux-unpacked/PDManer" "$out/bin/pdmaas"
+      fi
 
       runHook postInstall
     '';
 
     meta = {
       description = "Open-source data modeling platform desktop application";
-      homepage = "https://github.com/yonsum/PDMaas";
+      homepage = "https://gitee.com/robergroup/pdmaner";
       license = prev.lib.licenses.agpl3Only;
       maintainers = [ ];
       mainProgram = "pdmaas";
-      platforms = electron.meta.platforms;
+      platforms = prev.lib.platforms.linux ++ prev.lib.platforms.darwin;
     };
   };
 }
