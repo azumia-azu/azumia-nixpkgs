@@ -2,6 +2,20 @@ final: prev:
 
 let
   version = "4.9.3";
+  electronVersion = "13.1.7";
+  electronPlatform = if prev.stdenv.hostPlatform.isDarwin then "darwin" else "linux";
+  electronArch = if prev.stdenv.hostPlatform.isAarch64 then "arm64" else "x64";
+  electronHash = prev.lib.getAttr "${electronPlatform}-${electronArch}" {
+    darwin-arm64 = "sha256-DviR1yLb7o2NoXqXEtMI1/PNzdF5bVQ8wD7lj3obgXo=";
+    darwin-x64 = "sha256-EwDWbGtYsyEdxMDc8I2+sYpbFI1IW8q3tNrRm4YK09w=";
+    linux-arm64 = "sha256-fjAuAHIR8G3zKfrFeZWo5swruQIDVIZwbSfigQhPPqA=";
+    linux-x64 = "sha256-i64TC0zuuNNmT4+nSJ5zCEdBpn8RMWaKtOmNHNIZoKM=";
+  };
+  electronDist = prev.fetchzip {
+    url = "https://github.com/electron/electron/releases/download/v${electronVersion}/electron-v${electronVersion}-${electronPlatform}-${electronArch}.zip";
+    hash = electronHash;
+    stripRoot = false;
+  };
 in
 {
   pdmaner = prev.buildNpmPackage {
@@ -35,10 +49,13 @@ in
 
     postPatch = ''
       mkdir -p jre/linux
+      cp -R ${electronDist} electron-dist
+      chmod -R u+w electron-dist
       cp ${./pdmaner-package-lock.json} package-lock.json
       substituteInPlace package.json \
         --replace-fail 'electron-builder --mac' 'electron-builder --mac dir' \
-        --replace-fail 'electron-builder --linux' 'electron-builder --linux dir'
+        --replace-fail 'electron-builder --linux' 'electron-builder --linux dir' \
+        --replace-fail '"asar": true,' '"electronDist": "electron-dist", "asar": true,'
     '';
 
     installPhase = ''
