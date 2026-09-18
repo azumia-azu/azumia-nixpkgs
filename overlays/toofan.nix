@@ -4,7 +4,7 @@ let
   version = "2.3.0";
 in
 {
-  toofan = prev.buildGo125Module {
+  toofan = prev.buildGoModule {
     pname = "toofan";
     inherit version;
 
