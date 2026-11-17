@@ -1,0 +1,1951 @@
+diff --git a/README.md b/README.md
+index 9bca574181..6910d2018e 100644
+--- a/README.md
++++ b/README.md
+@@ -57,7 +57,7 @@ ### Windows
+ 
+ ## Features
+ 
+-- **Five engines in one tree**: PostgreSQL, MySQL, SQLite, SQL Server and Redis, side by side in the same session.
++- **Six engines in one tree**: PostgreSQL, GaussDB/openGauss, MySQL, SQLite, SQL Server and Redis, side by side in the same session. GaussDB uses a native driver for SHA256 authentication; see [GaussDB connections](docs/config.md#gaussdb-and-opengauss).
+ - **tmux inside.** Sessions, windows, split panes and tabs, with `SPC` as the leader (`SPC %` splits, `SPC c` opens a window, `SPC s` lists sessions). Each session sees all your connections. The layout you quit from comes back next time, and you can save named layouts. When sqlmux runs inside tmux, `C-h` / `C-j` / `C-k` / `C-l` can carry on into the tmux panes around sqlmux ([`outer_nav`](docs/config.md#moving-between-tmux-and-sqlmux-panes)).
+ - **Edit tables in place.** Change cells, add and delete rows, then `C-s` saves everything in one transaction. Enum, boolean and time columns get pickers; long text and JSON open in a value editor.
+ - **Table tabs.** A WHERE input with completion, history and favorites; multi-column ORDER, LIMIT, paging, a column picker, transpose, filter by a cell's value, export to CSV or JSON.
+diff --git a/changes.patch b/changes.patch
+new file mode 100644
+index 0000000000..e69de29bb2
+diff --git a/docs/config.md b/docs/config.md
+index 7b8f29c0d6..ed719881d4 100644
+--- a/docs/config.md
++++ b/docs/config.md
+@@ -107,7 +107,7 @@ ## connections.toml
+ ```toml
+ [[connection]]
+ name     = "local"                     # required, unique; no / or \, not starting with .
+-engine   = "postgres"                  # postgres | mysql | sqlite | mssql | redis
++engine   = "postgres"                  # postgres | gaussdb | mysql | sqlite | mssql | redis
+ dsn      = "postgres://me@localhost:5432/app?sslmode=disable"
+ password_cmd = "security find-generic-password -s sqlmux-local -w"
+ read_only = false                      # refuse writes on this connection
+@@ -123,6 +123,7 @@ ## connections.toml
+ | engine | dsn |
+ |---|---|
+ | `postgres` | `postgres://user@host:5432/db?sslmode=disable` (the tree lists the other databases on the server too) |
++| `gaussdb` | `gaussdb://user@host:8000/db?sslmode=prefer`; also `opengauss://`, `postgres://`, `postgresql://`, or keyword/value form under this explicit engine |
+ | `mysql` | `user@tcp(host:3306)/db` or `mysql://user@host:3306/db` |
+ | `sqlite` | a file path; `~` is expanded, `?mode=ro` and other query parameters pass through; a missing file is not created |
+ | `mssql` | `sqlserver://user@host:1433?database=app` (`mssql://` works too); driver options such as `encrypt` pass through. A server with a self-signed certificate, like the official Docker image, needs `&TrustServerCertificate=true` |
+@@ -150,6 +151,33 @@ ## connections.toml
+ 
+ `ssh = "user@host"` runs `ssh -W host:port user@host` for each connection; the port, key and `ProxyJump` come from `~/.ssh/config`, and no local port is opened. ssh cannot ask for a password or passphrase here, so `ssh-add` the key first. It does not apply to SQLite or to connections given on the command line.
+ 
++### GaussDB and openGauss
++
++Use `engine = "gaussdb"` for PostgreSQL-protocol GaussDB or openGauss. GaussDB(for MySQL) uses `engine = "mysql"`. The native Go driver supports GaussDB SHA256, MD5 and PostgreSQL SCRAM authentication; GaussDB SHA256 is a different protocol from SCRAM-SHA-256. SM3 authentication is not supported by this driver. It does not load JDBC driver jars.
++
++```toml
++[[connection]]
++name         = "gauss"
++engine       = "gaussdb"
++dsn          = "gaussdb://app_user@db.example:8000/app?sslmode=verify-full&sslrootcert=/path/to/ca.pem"
++password_env = "GAUSS_APP_PASSWORD"
++databases    = ["app"]
++schemas      = ["app.public"]
++```
++
++Use the actual instance port. `sslmode`, `sslrootcert`, `sslcert` and `sslkey` are handled by the native driver. Password sources, SSH tunnels, database/schema selection, completion, editing, manual transactions and CSV/JSON export work as for other SQL connections. The native driver reads `GAUSSDB_HOST`, `GAUSSDB_PORT`, `GAUSSDB_DATABASE`, `GAUSSDB_USER`, `GAUSSDB_PASSWORD`, `GAUSSDB_PASSFILE` and other `GAUSSDB_*` connection variables; it does not use PostgreSQL's `PG*` variables.
++
++For an existing JDBC URL such as `jdbc:postgresql://db.example:30100/app`, remove `jdbc:` and use that URL as the DSN with explicit `engine = "gaussdb"`. On the command line, use `gaussdb://` or `opengauss://` to select the GaussDB driver; `postgres://` selects PostgreSQL.
++
++The engine uses GaussDB catalogs for generated columns, partitions, keys, indexes and function definitions. SQL follows the database's own compatibility mode: for example, an Oracle-compatible database can treat an empty string as NULL. sqlmux preserves the server's returned values.
++
++Integration tests use `SQLMUX_TEST_GAUSSDB`, independently of the PostgreSQL instance. Set it only to a disposable test database whose account can create schemas, tables, types, functions, sequences and indexes. The tests create and clean up their own schemas. The INCLUDE-index tests require an instance started with `enable_ustore=on`; materialized views use Astore.
++
++```sh
++SQLMUX_TEST_GAUSSDB='gaussdb://user:password@localhost:55433/postgres?sslmode=disable' \
++  go test -race -tags integration ./internal/db/gaussdb
++```
++
+ ### External commands (`engine = "exec"`)
+ 
+ For a database you can only reach through a command-line tool, sqlmux can run every statement through that command instead of a driver. Such a connection is always read-only, and is written by hand (the connection form and manager don't list it).
+diff --git a/docs/quickstart.md b/docs/quickstart.md
+index 98dfec840c..d6bb830a1a 100644
+--- a/docs/quickstart.md
++++ b/docs/quickstart.md
+@@ -25,6 +25,7 @@ ## 2. Open a database
+ ```sh
+ sqlmux ./app.db
+ sqlmux "postgres://me@localhost:5432/app?sslmode=disable"
++sqlmux "gaussdb://me@db.example:8000/app?sslmode=prefer"   # also opengauss://
+ sqlmux "mysql://me@localhost:3306/app"
+ sqlmux "redis://localhost:6379/0"
+ ```
+@@ -42,7 +43,7 @@ ## 2. Open a database
+ ```toml
+ [[connection]]
+ name         = "local"
+-engine       = "postgres"          # postgres | mysql | sqlite | mssql | redis
++engine       = "postgres"          # postgres | gaussdb | mysql | sqlite | mssql | redis
+ dsn          = "postgres://me@localhost:5432/app?sslmode=disable"
+ password_env = "PGPASSWORD"        # or password_cmd = "…", or password = "…"
+ ```
+@@ -59,6 +60,8 @@ ## 2. Open a database
+ 
+ Running `sqlmux` with no connections opens a form instead (name, engine, host, port, user, password, database); its password goes to the OS keychain. All the connection fields are in [Configuration](config.md#connectionstoml).
+ 
++For PostgreSQL-protocol GaussDB or openGauss, choose `gaussdb` in the form, or set `engine = "gaussdb"` in the file. Set the instance's actual port (the form suggests 8000). This uses native GaussDB SHA256 authentication rather than the PostgreSQL driver. GaussDB(for MySQL) uses `mysql`. See [GaussDB connections](config.md#gaussdb-and-opengauss) for TLS, credentials and the supported authentication methods.
++
+ ## 3. Your first table
+ 
+ The window has three panes: the schema tree on the left, a data pane, and a query on the right.
+diff --git a/go.mod b/go.mod
+index a44bd30392..e412c9428a 100644
+--- a/go.mod
++++ b/go.mod
+@@ -5,6 +5,7 @@ require (
+ require (
+ 	charm.land/bubbletea/v2 v2.0.9
+ 	github.com/BurntSushi/toml v1.6.0
++	github.com/HuaweiCloudDeveloper/gaussdb-go v1.0.0-rc1
+ 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886
+ 	github.com/charmbracelet/x/ansi v0.11.8
+ 	github.com/charmbracelet/x/exp/golden v0.0.0-20250806222409-83e3a29d542f
+@@ -52,6 +53,7 @@ require (
+ 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+ 	github.com/rivo/uniseg v0.4.7 // indirect
+ 	github.com/shopspring/decimal v1.4.0 // indirect
++	github.com/tjfoc/gmsm v1.4.1 // indirect
+ 	github.com/xo/terminfo v1.0.0 // indirect
+ 	go.uber.org/atomic v1.12.0 // indirect
+ 	golang.org/x/crypto v0.55.0 // indirect
+diff --git a/go.sum b/go.sum
+index c3b165f6ee..c3a7d51e16 100644
+--- a/go.sum
++++ b/go.sum
+@@ -1,5 +1,6 @@ charm.land/bubbletea/v2 v2.0.9 h1:DpJCMWKgzQK8SJv4zbKKFHAI10ymWy/evClPFk0k0f8=
+ charm.land/bubbletea/v2 v2.0.9 h1:DpJCMWKgzQK8SJv4zbKKFHAI10ymWy/evClPFk0k0f8=
+ charm.land/bubbletea/v2 v2.0.9/go.mod h1:2SkdgoTXluXJHOUwAoRlRXF/28vklb1rFl6GcgV1/ss=
++cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
+ github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1 h1:zvXfGJCWvywnCA814d8ZiVyt+fm9nnTE8xSb99zRyfo=
+ github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1/go.mod h1:iptorS+VYKFL2N6PnebpS91dubG35eAOEERnT4PJbQU=
+ github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1 h1:u93s+zU2JD62im61Bm5CZIc1ZrOJaIAWEg0WOrMVkEo=
+@@ -12,8 +13,11 @@ github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/internal v1.2.0/go.mod h
+ github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/internal v1.2.0/go.mod h1:ucUjca2JtSZboY8IoUqyQyuuXvwbMBVwFOm0vdQPNhA=
+ github.com/AzureAD/microsoft-authentication-library-for-go v1.8.0 h1:Nljr4q1GRA/5vCrMONS+g4u4LRHNgOXVSh3O43J2CnI=
+ github.com/AzureAD/microsoft-authentication-library-for-go v1.8.0/go.mod h1:Y33QHnf0FfdVewFFISOGe20mkZbxX4H839o955/PoeI=
++github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
+ github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
+ github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
++github.com/HuaweiCloudDeveloper/gaussdb-go v1.0.0-rc1 h1:OIZ83SgbK0ImF/vKFSfNoCAQWQySx5sYhj0RgsWbMbA=
++github.com/HuaweiCloudDeveloper/gaussdb-go v1.0.0-rc1/go.mod h1:Xf3AtRet+/ygewEMfzt0FbIFydPkv47Hx5Xz3w07+yo=
+ github.com/Masterminds/semver/v3 v3.5.0 h1:kQceYJfbupGfZOKZQg0kou0DgAKhzDg2NZPAwZ/2OOE=
+ github.com/Masterminds/semver/v3 v3.5.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
+ github.com/aymanbagabas/go-udiff v0.4.1 h1:OEIrQ8maEeDBXQDoGCbbTTXYJMYRCRO1fnodZ12Gv5o=
+@@ -22,6 +26,7 @@ github.com/bsm/ginkgo/v2 v2.12.0/go.mod h1:SwYbGRRDovPVboqFv0tPTcG1sN61LM1Z4ARdb
+ github.com/bsm/ginkgo/v2 v2.12.0/go.mod h1:SwYbGRRDovPVboqFv0tPTcG1sN61LM1Z4ARdbAV9g4c=
+ github.com/bsm/gomega v1.27.10 h1:yeMWxP2pV2fG3FgAODIY8EiRE3dy0aeFYt4l7wh6yKA=
+ github.com/bsm/gomega v1.27.10/go.mod h1:JyEr/xRbxbtgWNi8tIEVPUYZ5Dzef52k01W3YH0H+O0=
++github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
+ github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
+ github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
+ github.com/charmbracelet/colorprofile v0.4.3 h1:QPa1IWkYI+AOB+fE+mg/5/4HRMZcaXex9t5KX76i20Q=
+@@ -38,10 +43,12 @@ github.com/charmbracelet/x/termios v0.1.1/go.mod h1:rB7fnv1TgOPOyyKRJ9o+AsTU/vK5
+ github.com/charmbracelet/x/termios v0.1.1/go.mod h1:rB7fnv1TgOPOyyKRJ9o+AsTU/vK5WHJ2ivHeut/Pcwo=
+ github.com/charmbracelet/x/windows v0.2.2 h1:IofanmuvaxnKHuV04sC0eBy/smG6kIKrWG2/jYn2GuM=
+ github.com/charmbracelet/x/windows v0.2.2/go.mod h1:/8XtdKZzedat74NQFn0NGlGL4soHB0YQZrETF96h75k=
++github.com/client9/misspell v0.3.4/go.mod h1:qj6jICC3Q7zFZvVWo7KLAzC3yx5G7kyvSDkc90ppPyw=
+ github.com/clipperhouse/displaywidth v0.11.0 h1:lBc6kY44VFw+TDx4I8opi/EtL9m20WSEFgwIwO+UVM8=
+ github.com/clipperhouse/displaywidth v0.11.0/go.mod h1:bkrFNkf81G8HyVqmKGxsPufD3JhNl3dSqnGhOoSD/o0=
+ github.com/clipperhouse/uax29/v2 v2.7.0 h1:+gs4oBZ2gPfVrKPthwbMzWZDaAFPGYK72F0NJv2v7Vk=
+ github.com/clipperhouse/uax29/v2 v2.7.0/go.mod h1:EFJ2TJMRUaplDxHKj1qAEhCtQPW2tJSwu5BF98AuoVM=
++github.com/cncf/udpa/go v0.0.0-20191209042840-269d4d468f6f/go.mod h1:M8M6+tZqaGXZJjfX53e64911xZQV5JYwmTeXPW+k8Sc=
+ github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+ github.com/dlclark/regexp2/v2 v2.5.2 h1:HAsucWRhsqcDzl6Ua9aR8JwYOTzrZyPrF0/FNxJVAI0=
+ github.com/dlclark/regexp2/v2 v2.5.2/go.mod h1:avUrQvPaLz2DrFNHJF0taWAFFX2C1GMSSoeiqFjcBmU=
+@@ -49,6 +56,9 @@ github.com/dop251/goja v0.0.0-20260926152631-39ec2650adc9/go.mod h1:u8yZRUavu+N4
+ github.com/dop251/goja v0.0.0-20260926152631-39ec2650adc9/go.mod h1:u8yZRUavu+N4EnFFy6J5fVtjE7lEcZ2YyV2GcBXY9c8=
+ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
+ github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
++github.com/envoyproxy/go-control-plane v0.9.0/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
++github.com/envoyproxy/go-control-plane v0.9.4/go.mod h1:6rpuAdCZL397s3pYoYcLgu1mIlRU8Am5FuJP05cCM98=
++github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
+ github.com/go-sourcemap/sourcemap v2.1.3+incompatible h1:W1iEw64niKVGogNgBN3ePyLFfuisuzeidWPMPWmECqU=
+ github.com/go-sourcemap/sourcemap v2.1.3+incompatible/go.mod h1:F8jJfvm2KbVjc5NqelyYJmf/v5J0dwNLS2mL4sNA1Jg=
+ github.com/go-sql-driver/mysql v1.7.1 h1:lUIinVbN1DY0xBg0eMOzmmtGoHwWBbvnWubQUrtU8EI=
+@@ -61,6 +71,21 @@ github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9/go.mod h1:8vg3r2V
+ github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9/go.mod h1:8vg3r2VgvsThLBIFL93Qb5yWzgyZWhEmBwUJWevAkK0=
+ github.com/golang-sql/sqlexp v0.1.0 h1:ZCD6MBpcuOVfGVqsEmY5/4FtYiKz6tSyUv9LPEDei6A=
+ github.com/golang-sql/sqlexp v0.1.0/go.mod h1:J4ad9Vo8ZCWQ2GMrC4UCQy1JpCbwU9m3EOqtpKwwwHI=
++github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b/go.mod h1:SBH7ygxi8pfUlaOkMMuAQtPIUF8ecWP5IEl/CR7VP2Q=
++github.com/golang/mock v1.1.1/go.mod h1:oTYuIxOrZwtPieC+H1uAHpcLFnEyAGVDL/k47Jfbm0A=
++github.com/golang/protobuf v1.2.0/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
++github.com/golang/protobuf v1.3.2/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
++github.com/golang/protobuf v1.3.3/go.mod h1:vzj43D7+SQXF/4pzW/hwtAqwc6iTitCiVSaWz5lYuqw=
++github.com/golang/protobuf v1.4.0-rc.1/go.mod h1:ceaxUfeHdC40wWswd/P6IGgMaK3YpKi5j83Wpe3EHw8=
++github.com/golang/protobuf v1.4.0-rc.1.0.20200221234624-67d41d38c208/go.mod h1:xKAWHe0F5eneWXFV3EuXVDTCmh+JuBKY0li0aMyXATA=
++github.com/golang/protobuf v1.4.0-rc.2/go.mod h1:LlEzMj4AhA7rCAGe4KMBDvJI+AwstrUpVNzEA03Pprs=
++github.com/golang/protobuf v1.4.0-rc.4.0.20200313231945-b860323f09d0/go.mod h1:WU3c8KckQ9AFe+yFwt9sWVRKCVIyN9cPHBJSNnbL67w=
++github.com/golang/protobuf v1.4.0/go.mod h1:jodUvKwWbYaEsadDk5Fwe5c77LiNKVO9IDvqG2KuDX0=
++github.com/golang/protobuf v1.4.2/go.mod h1:oDoupMAO8OvCJWAcko0GGGIgR6R6ocIYbsSw735rRwI=
++github.com/google/go-cmp v0.2.0/go.mod h1:oXzfMopK8JAjlY9xF4vHSVASa0yLyX7SntLO5aqRK0M=
++github.com/google/go-cmp v0.3.0/go.mod h1:8QqcDgzrUqlUb/G2PQTWiueGozuR1884gddMywk6iLU=
++github.com/google/go-cmp v0.3.1/go.mod h1:8QqcDgzrUqlUb/G2PQTWiueGozuR1884gddMywk6iLU=
++github.com/google/go-cmp v0.4.0/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
+ github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 h1:LMLX+LgTNWpfvCBdFebv6EsYotImrt/Ppc5cXIriCSo=
+ github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3/go.mod h1:jl5iWTm0/hd5PjEYEOuwAJ57L/CibdZfrqZ5XA5GrCk=
+ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+@@ -98,6 +123,7 @@ github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmd
+ github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=
+ github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c/go.mod h1:7rwL4CYBLnjLxUqIJNnCWiEdr3bn6IUYi15bNlnbCCU=
+ github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
++github.com/prometheus/client_model v0.0.0-20190812154241-14fe0d1b01d4/go.mod h1:xMI15A0UPsDsEKsMN9yxemIoYk6Tm2C1GtYGdfGttqA=
+ github.com/redis/go-redis/v9 v9.23.0 h1:/TTVdJa8BRNsybwwGGnmiYktHNlUXtbOQxlWpHBPL3s=
+ github.com/redis/go-redis/v9 v9.23.0/go.mod h1:EWP2UUk+XDaI1s5nQB5mablZN6vccXlmBQTyfnF87D0=
+ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
+@@ -111,6 +137,8 @@ github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/
+ github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
+ github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
+ github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
++github.com/tjfoc/gmsm v1.4.1 h1:aMe1GlZb+0bLjn+cKTPEvvn9oUEBlJitaZiiBwsbgho=
++github.com/tjfoc/gmsm v1.4.1/go.mod h1:j4INPkHWMrhJb38G+J6W4Tw0AbuN8Thu3PbdVYhVcTE=
+ github.com/xo/terminfo v1.0.0 h1:2ZpYzqWzyyytjk3TP6aJVDhkMAkc99/1xKQdA3TDTBY=
+ github.com/xo/terminfo v1.0.0/go.mod h1:RbqR21r5mrJuqunuUZ/Dhy/avygyECGrLceyNeo4LiM=
+ github.com/zeebo/xxh3 v1.1.0 h1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=
+@@ -119,24 +147,69 @@ go.uber.org/atomic v1.12.0/go.mod h1:I6c4cg+6HCxRjfjSsYtApoFILnpc0CGUdGkXVqbYVNk
+ go.uber.org/atomic v1.12.0/go.mod h1:I6c4cg+6HCxRjfjSsYtApoFILnpc0CGUdGkXVqbYVNk=
+ go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
+ go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=
++golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
++golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9/go.mod h1:LzIPMQfyMNhhGPhUkYOs5KpL4U8rLKemX1yGLhDgUto=
++golang.org/x/crypto v0.0.0-20201012173705-84dcc777aaee/go.mod h1:LzIPMQfyMNhhGPhUkYOs5KpL4U8rLKemX1yGLhDgUto=
+ golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=
+ golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=
++golang.org/x/exp v0.0.0-20190121172915-509febef88a4/go.mod h1:CJ0aWSM057203Lf6IL+f9T1iT9GByDxfZKAQTCR3kQA=
+ golang.org/x/exp v0.0.0-20231006140011-7918f672742d h1:jtJma62tbqLibJ5sFQz8bKtEM8rJBtfilJ2qTU199MI=
+ golang.org/x/exp v0.0.0-20231006140011-7918f672742d/go.mod h1:ldy0pHrwJyGW56pPQzzkH36rKxoZW1tw7ZJpeKx+hdo=
++golang.org/x/lint v0.0.0-20181026193005-c67002cb31c3/go.mod h1:UVdnD1Gm6xHRNCYTkRU2/jEulfH38KcIWyp/GAMgvoE=
++golang.org/x/lint v0.0.0-20190227174305-5b3e6a55c961/go.mod h1:wehouNa3lNwaWXcvxsM5YxQ5yQlVC4a0KAMCusXpPoU=
++golang.org/x/lint v0.0.0-20190313153728-d0100b6bd8b3/go.mod h1:6SW0HCj/g11FgYtHlgUYUwCkIfeOF89ocIRzGO/8vkc=
+ golang.org/x/mod v0.41.0 h1:qJmnOUb4YB+FsEuM3HcWucdZASCPGhsX6uljO6pog0c=
+ golang.org/x/mod v0.41.0/go.mod h1:Ek9pY8RKWXwsWvd3rQiHYtMqkjSUV+s1Rj7j4H5Ur6o=
++golang.org/x/net v0.0.0-20180724234803-3673e40ba225/go.mod h1:mL1N/T3taQHkDXs73rZJwtUhF3w3ftmwwsq0BUmARs4=
++golang.org/x/net v0.0.0-20180826012351-8a410e7b638d/go.mod h1:mL1N/T3taQHkDXs73rZJwtUhF3w3ftmwwsq0BUmARs4=
++golang.org/x/net v0.0.0-20190213061140-3a22650c66bd/go.mod h1:mL1N/T3taQHkDXs73rZJwtUhF3w3ftmwwsq0BUmARs4=
++golang.org/x/net v0.0.0-20190311183353-d8887717615a/go.mod h1:t9HGtf8HONx5eT2rtn7q6eTqICYqUVnKs3thJo3Qplg=
++golang.org/x/net v0.0.0-20190404232315-eb5bcb51f2a3/go.mod h1:t9HGtf8HONx5eT2rtn7q6eTqICYqUVnKs3thJo3Qplg=
++golang.org/x/net v0.0.0-20201010224723-4f7140c49acb/go.mod h1:sp8m0HH+o8qH0wwXwYZr8TS3Oi6o0r6Gce1SSxlDquU=
+ golang.org/x/net v0.58.0 h1:ynWG7rqYi4ccpTEuPZ2QGWHktVEM9DMCj9yzDE0Q7To=
+ golang.org/x/net v0.58.0/go.mod h1:YwCddHnFlT7eLQqVprV19OnhLGtc5xOKgE0RyqgfWAU=
++golang.org/x/oauth2 v0.0.0-20180821212333-d2e6202438be/go.mod h1:N/0e6XlmueqKjAGxoOufVs8QHGRruUQn6yWY3a++T0U=
++golang.org/x/sync v0.0.0-20180314180146-1d60e4601c6f/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
++golang.org/x/sync v0.0.0-20181108010431-42b317875d0f/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
++golang.org/x/sync v0.0.0-20190423024810-112230192c58/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.23.0 h1:KameEIfc1IkluZyXWLn39Wd4tURc6GbCiISGiZm2bQk=
+ golang.org/x/sync v0.23.0/go.mod h1:sUUOizhqBxiL6pEWpqNLUiaJn1ShEbZ6BBqskPbjZm0=
++golang.org/x/sys v0.0.0-20180830151530-49385e6e1522/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
++golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
++golang.org/x/sys v0.0.0-20190412213103-97732733099d/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
++golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+ golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=
+ golang.org/x/sys v0.48.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
++golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
++golang.org/x/text v0.3.3/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
+ golang.org/x/text v0.41.0 h1:vz/seA0lnX87Othu2f/0L24RcgrXD9/YFTSuGjj3rH8=
+ golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
++golang.org/x/tools v0.0.0-20180917221912-90fa682c2a6e/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
++golang.org/x/tools v0.0.0-20190114222345-bf090417da8b/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
++golang.org/x/tools v0.0.0-20190226205152-f727befe758c/go.mod h1:9Yl7xja0Znq3iFh3HoIrodX9oNMXvdceNzlUR8zjMvY=
++golang.org/x/tools v0.0.0-20190311212946-11955173bddd/go.mod h1:LCzVGOaR6xXOjkQ3onu1FJEFr0SW1gC7cKk1uF8kGRs=
++golang.org/x/tools v0.0.0-20190524140312-2c0ae7006135/go.mod h1:RgjU9mgBXZiqYHBnxXauZ1Gv1EHHAz9KjViQ78xBX0Q=
+ golang.org/x/tools v0.50.0 h1:c2ifzfcuY7L90lZ2aKd8S4K2NpASF08SZx9ZuJkHmSU=
+ golang.org/x/tools v0.50.0/go.mod h1:7ulVMw3831Mwi5EZD6RomGyffr4VFjuNYXf2BbCEAV0=
++golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
++google.golang.org/appengine v1.1.0/go.mod h1:EbEs0AVv82hx2wNQdGPgUI5lhzA/G0D9YwlJXL52JkM=
++google.golang.org/appengine v1.4.0/go.mod h1:xpcJRLb0r/rnEns0DIKYYv+WjYCduHsrkT7/EB5XEv4=
++google.golang.org/genproto v0.0.0-20180817151627-c66870c02cf8/go.mod h1:JiN7NxoALGmiZfu7CAH4rXhgtRTLTxftemlI0sWmxmc=
++google.golang.org/genproto v0.0.0-20190819201941-24fa4b261c55/go.mod h1:DMBHOl98Agz4BDEuKkezgsaosCRResVns1a3J2ZsMNc=
++google.golang.org/grpc v1.19.0/go.mod h1:mqu4LbDTu4XGKhr4mRzUsmM4RtVoemTSY81AxZiDr8c=
++google.golang.org/grpc v1.23.0/go.mod h1:Y5yQAOtifL1yxbo5wqy6BxZv8vAUGQwXBOALyacEbxg=
++google.golang.org/grpc v1.25.1/go.mod h1:c3i+UQWmh7LiEpx4sFZnkU36qjEYZ0imhYfXVyQciAY=
++google.golang.org/grpc v1.31.0/go.mod h1:N36X2cJ7JwdamYAgDz+s+rVMFjt3numwzf/HckM8pak=
++google.golang.org/protobuf v0.0.0-20200109180630-ec00e32a8dfd/go.mod h1:DFci5gLYBciE7Vtevhsrf46CRTquxDuWsQurQQe4oz8=
++google.golang.org/protobuf v0.0.0-20200221191635-4d8936d0db64/go.mod h1:kwYJMbMJ01Woi6D6+Kah6886xMZcty6N08ah7+eCXa0=
++google.golang.org/protobuf v0.0.0-20200228230310-ab0ca4ff8a60/go.mod h1:cfTl7dwQJ+fmap5saPgwCLgHXTUD7jkjRqWcaiX5VyM=
++google.golang.org/protobuf v1.20.1-0.20200309200217-e05f789c0967/go.mod h1:A+miEFZTKqfCUM6K7xSMQL9OKL/b6hQv+e19PK+JZNE=
++google.golang.org/protobuf v1.21.0/go.mod h1:47Nbq4nVaFHyn7ilMalzfO3qCViNmqZ2kzikPIcrTAo=
++google.golang.org/protobuf v1.23.0/go.mod h1:EGpADcykh3NcUnDUJcl1+ZksZNG86OlYog2l/sGQquU=
+ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+ gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
++honnef.co/go/tools v0.0.0-20190102054323-c2f93a96b099/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
++honnef.co/go/tools v0.0.0-20190523083050-ea95bdfd59fc/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
+ modernc.org/cc/v4 v4.29.7 h1:q+NXGJ0bK3b4TXFYQQVr9pYETGnmwFWkrUzJnMya/Tg=
+ modernc.org/cc/v4 v4.29.7/go.mod h1:OnovgIhbbMXMu1aISnJ0wvVD1KnW+cAUJkIrAWh+kVI=
+ modernc.org/ccgo/v4 v4.36.1 h1:ZNIUZAryN0UgnJwtyxrdEzcFc3yD4Cu4AzjfPXsLsIE=
+diff --git a/internal/app/connform.go b/internal/app/connform.go
+index 64271c7ac1..e93339355d 100644
+--- a/internal/app/connform.go
++++ b/internal/app/connform.go
+@@ -71,11 +71,11 @@ type connForm struct {
+ 	fieldPassword: "password", fieldDatabase: "database", fieldReadOnly: "read_only", fieldProduction: "production", fieldAdvanced: "", fieldDSN: "dsn", fieldPasswordCmd: "password_cmd", fieldSSH: "ssh"}
+ 
+ // defaultPort is the port of an engine's server.
+-var defaultPort = map[string]string{"postgres": "5432", "mysql": "3306", "redis": "6379", "mssql": "1433"} // none for SQLite
++var defaultPort = map[string]string{"postgres": "5432", "gaussdb": "8000", "mysql": "3306", "redis": "6379", "mssql": "1433"} // none for SQLite
+ 
+ // dsnExample is what an empty dsn field shows of each engine, the URL form
+ // of both (§8): the driver's own form of MySQL is read as well, not shown.
+-var dsnExample = map[string]string{"postgres": "postgres://user:pass@host:5432/db?sslmode=prefer", "mysql": "mysql://user:pass@host:3306/db", "sqlite": "~/data.db?mode=ro", "redis": "redis://user:pass@host:6379/0", "mssql": "sqlserver://user:pass@host:1433?database=db&TrustServerCertificate=true"}
++var dsnExample = map[string]string{"postgres": "postgres://user:pass@host:5432/db?sslmode=prefer", "gaussdb": "gaussdb://user:pass@host:8000/db?sslmode=prefer", "mysql": "mysql://user:pass@host:3306/db", "sqlite": "~/data.db?mode=ro", "redis": "redis://user:pass@host:6379/0", "mssql": "sqlserver://user:pass@host:1433?database=db&TrustServerCertificate=true"}
+ 
+ // managed are the connections the manager lists: those of connections.toml,
+ // not one of the command line, which is nowhere to find, edit or delete (F14.1).
+@@ -101,7 +101,7 @@ func blankFields() []ui.FormField {
+ 		fs[i].Label = name
+ 	}
+ 	fs[fieldAdvanced].Label = i18n.T("高级")
+-	fs[fieldEngine].Kind, fs[fieldEngine].Choices = ui.FormSegments, []string{"postgres", "mysql", "sqlite", "redis", "mssql"}
++	fs[fieldEngine].Kind, fs[fieldEngine].Choices = ui.FormSegments, []string{"postgres", "mysql", "sqlite", "redis", "mssql", "gaussdb"}
+ 	fs[fieldReadOnly].Kind = ui.FormCheck
+ 	fs[fieldProduction].Kind = ui.FormCheck
+ 	fs[fieldAdvanced].Kind = ui.FormFold
+@@ -352,7 +352,7 @@ func composeDSN(engine, host, port, user, database string) string {
+ 		if database != "" {
+ 			u.RawQuery = "database=" + url.QueryEscape(database)
+ 		}
+-	case "postgres":
++	case "postgres", "gaussdb":
+ 		u.Path = "/" + database
+ 		u.RawQuery = "sslmode=prefer"
+ 	default:
+diff --git a/internal/app/gaussdb_test.go b/internal/app/gaussdb_test.go
+new file mode 100644
+index 0000000000..98e19f7c19
+--- /dev/null
++++ b/internal/app/gaussdb_test.go
+@@ -0,0 +1,45 @@ func TestGaussDBFormCreatesSQLConnection(t *testing.T) {
++package app
++
++import (
++	"slices"
++	"testing"
++
++	"github.com/kackerx/sqlmux/internal/config"
++	"github.com/kackerx/sqlmux/internal/sqlkit"
++)
++
++func TestGaussDBFormCreatesSQLConnection(t *testing.T) {
++	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
++	a, _ := withSessions()
++	a.openConnForm()
++	for field, value := range map[int]string{fieldName: "gauss", fieldHost: "db.example", fieldUser: "app", fieldDatabase: "sales"} {
++		a.form.fields[field].Input.Text = value
++	}
++	choices := a.form.fields[fieldEngine].Choices
++	a.formSegment(fieldEngine, slices.Index(choices, "gaussdb"))
++	spec, ok := a.formConn()
++	if !ok || spec.Engine != "gaussdb" || spec.DSN != "gaussdb://app@db.example:8000/sales?sslmode=prefer" {
++		t.Fatalf("form connection %+v: %s", spec, a.form.err)
++	}
++	spec.Databases, spec.Schemas = []string{"sales"}, []string{"sales.public"}
++	if field, problem := spec.Check(nil); problem != "" {
++		t.Fatalf("connection %s: %s", field, problem)
++	}
++	c := newConn(spec)
++	if !c.sql() || c.dialect() != sqlkit.PG {
++		t.Fatal("GaussDB does not initialize a PostgreSQL-family SQL engine")
++	}
++	for _, kind := range []nodeKind{nodeConn, nodeDatabase} {
++		dbs, ok := pickable(node{kind: kind, conn: c})
++		if !ok || dbs != (kind == nodeConn) {
++			t.Errorf("picker %v: databases=%v, enabled=%v", kind, dbs, ok)
++		}
++	}
++	if err := config.AppendConnection(spec); err != nil {
++		t.Fatal(err)
++	}
++	loaded, _, err := config.LoadConnections("gauss")
++	if err != nil || len(loaded) != 1 || loaded[0].DSN != spec.DSN || loaded[0].Engine != spec.Engine {
++		t.Fatalf("saved connection %+v: %v", loaded, err)
++	}
++}
+diff --git a/internal/app/pick.go b/internal/app/pick.go
+index f4ebb6a086..2a6561ed66 100644
+--- a/internal/app/pick.go
++++ b/internal/app/pick.go
+@@ -49,10 +49,10 @@ func pickable(n node) (dbs, ok bool) {
+ 	switch {
+ 	case n.kind == nodeConn && n.conn.Spec.Kind() == "mysql":
+ 		return false, true
+-	case n.kind == nodeConn && (n.conn.Spec.Kind() == "postgres" || n.conn.Spec.Kind() == "mssql"):
++	case n.kind == nodeConn && (n.conn.Spec.Kind() == "postgres" || n.conn.Spec.Kind() == "gaussdb" || n.conn.Spec.Kind() == "mssql"):
+ 		return true, true
+ 	case n.kind == nodeDatabase:
+-		return false, n.conn.Spec.Kind() == "postgres" || n.conn.Spec.Kind() == "mssql"
++		return false, n.conn.Spec.Kind() == "postgres" || n.conn.Spec.Kind() == "gaussdb" || n.conn.Spec.Kind() == "mssql"
+ 	}
+ 	return false, false
+ }
+diff --git a/internal/app/testdata/TestConnForm.golden b/internal/app/testdata/TestConnForm.golden
+index c34a315b1b..9debe5ba4c 100644
+--- a/internal/app/testdata/TestConnForm.golden
++++ b/internal/app/testdata/TestConnForm.golden
+@@ -15,7 +15,7 @@
+ │       ▸  t_order_item  3.4m┌─ 连接 ───────────────────────────────────────────────────────────────────────────────────────────┐                             │
+ │       ▸  t_payment     410k│  doraemon               │          name doraemon                                               │                             │
+ │       ▸  t_refund       12k│  新建                   │         group                                                        │                             │
+-│       ▸  t_sku         8.1k│                          │        engine  postgres │ mysql │ sqlite │ redis │ mssql             │                             │
++│       ▸  t_sku         8.1k│                          │        engine  postgres │ mysql │ sqlite │ redis │ mssql │ gaussdb   │                             │
+ │       ▸  t_user         38k│                          │          host db.example                                             │                             │
+ │       ▸  t_user_address 52k│                          │          port 3307                                                   │                             │
+ │       ▸  t_user_profile 38k│                          │          user app                                                    │                             │
+diff --git a/internal/app/testdata/TestConnFormAdvanced.golden b/internal/app/testdata/TestConnFormAdvanced.golden
+index ad2a659fb3..22745fa095 100644
+--- a/internal/app/testdata/TestConnFormAdvanced.golden
++++ b/internal/app/testdata/TestConnFormAdvanced.golden
+@@ -13,7 +13,7 @@
+ │       ▸  schema_migrations ┌─ 连接 ───────────────────────────────────────────────────────────────────────────────────────────┐                             │
+ │       ▸  t_order       1.2m│  doraemon               │          name play                                                   │                             │
+ │       ▸  t_order_item  3.4m│  新建                   │         group                                                        │                             │
+-│       ▸  t_payment     410k│                          │        engine  postgres │ mysql │ sqlite │ redis │ mssql             │                             │
++│       ▸  t_payment     410k│                          │        engine  postgres │ mysql │ sqlite │ redis │ mssql │ gaussdb   │                             │
+ │       ▸  t_refund       12k│                          │          host                                                        │                             │
+ │       ▸  t_sku         8.1k│                          │          port 5432                                                   │                             │
+ │       ▸  t_user         38k│                          │          user                                                        │                             │
+diff --git a/internal/app/testdata/TestConnFormPassword.golden b/internal/app/testdata/TestConnFormPassword.golden
+index 26d58f2b0f..1fe3ba4637 100644
+--- a/internal/app/testdata/TestConnFormPassword.golden
++++ b/internal/app/testdata/TestConnFormPassword.golden
+@@ -15,7 +15,7 @@
+ │       ▸  t_order_item  3.4m┌─ 连接 ───────────────────────────────────────────────────────────────────────────────────────────┐                             │
+ │       ▸  t_payment     410k│  doraemon               │          name play                                                   │                             │
+ │       ▸  t_refund       12k│  新建                   │         group                                                        │                             │
+-│       ▸  t_sku         8.1k│                          │        engine  postgres │ mysql │ sqlite │ redis │ mssql             │                             │
++│       ▸  t_sku         8.1k│                          │        engine  postgres │ mysql │ sqlite │ redis │ mssql │ gaussdb   │                             │
+ │       ▸  t_user         38k│                          │          host h                                                      │                             │
+ │       ▸  t_user_address 52k│                          │          port 5432                                                   │                             │
+ │       ▸  t_user_profile 38k│                          │          user u                                                      │                             │
+diff --git a/internal/app/testdata/TestConnFormTest.golden b/internal/app/testdata/TestConnFormTest.golden
+index e6e3f52981..e801eb327e 100644
+--- a/internal/app/testdata/TestConnFormTest.golden
++++ b/internal/app/testdata/TestConnFormTest.golden
+@@ -13,7 +13,7 @@
+ │       ▸  schema_migrations ┌─ 连接 ───────────────────────────────────────────────────────────────────────────────────────────┐                             │
+ │       ▸  t_order       1.2m│  doraemon               │          name far                                                    │                             │
+ │       ▸  t_order_item  3.4m│  新建                   │         group                                                        │                             │
+-│       ▸  t_payment     410k│                          │        engine  postgres │ mysql │ sqlite │ redis │ mssql             │                             │
++│       ▸  t_payment     410k│                          │        engine  postgres │ mysql │ sqlite │ redis │ mssql │ gaussdb   │                             │
+ │       ▸  t_refund       12k│                          │          host                                                        │                             │
+ │       ▸  t_sku         8.1k│                          │          port 5432                                                   │                             │
+ │       ▸  t_user         38k│                          │          user                                                        │                             │
+diff --git a/internal/app/testdata/TestFormGroupList.golden b/internal/app/testdata/TestFormGroupList.golden
+index 27e81dd085..8bde6f2091 100644
+--- a/internal/app/testdata/TestFormGroupList.golden
++++ b/internal/app/testdata/TestFormGroupList.golden
+@@ -15,7 +15,7 @@
+ │       ▸  t_order_item  3.4m┌─ 连接 ───────────────────────────────────────────────────────────────────────────────────────────┐                             │
+ │       ▸  t_payment     410k│  doraemon               │          name n                                                      │                             │
+ │       ▸  t_refund       12k│  misc                   │         group pr                                                     │                             │
+-│       ▸  t_sku         8.1k│ ── prod ──────────────── │        engine ┌──────────────────┐sqlite │ redis │ mssql             │                             │
++│       ▸  t_sku         8.1k│ ── prod ──────────────── │        engine ┌──────────────────┐sqlite │ redis │ mssql │ gaussdb   │                             │
+ │       ▸  t_user         38k│  stage                  │          host │ prod             │                                   │                             │
+ │       ▸  t_user_address 52k│  live                   │          port │ prelude          │                                   │                             │
+ │       ▸  t_user_profile 38k│ ── dev ───────────────── │          user └──────────────────┘                                   │                             │
+diff --git a/internal/app/testdata/TestGoldenConnManager.golden b/internal/app/testdata/TestGoldenConnManager.golden
+index 7b17c60b78..acfde5508d 100644
+--- a/internal/app/testdata/TestGoldenConnManager.golden
++++ b/internal/app/testdata/TestGoldenConnManager.golden
+@@ -13,7 +13,7 @@
+ │       ▸  schema_migrations ┌─ 连接 ───────────────────────────────────────────────────────────────────────────────────────────┐                             │
+ │       ▸  t_order       1.2m│  doraemon               │          name doraemon                                               │                             │
+ │       ▸  t_order_item  3.4m│  second                │         group                                                        │                             │
+-│       ▸  t_payment     410k│  新建                   │        engine  postgres │ mysql │ sqlite │ redis │ mssql             │                             │
++│       ▸  t_payment     410k│  新建                   │        engine  postgres │ mysql │ sqlite │ redis │ mssql │ gaussdb   │                             │
+ │       ▸  t_refund       12k│                          │          host h                                                      │                             │
+ │       ▸  t_sku         8.1k│                          │          port 5433                                                   │                             │
+ │       ▸  t_user         38k│                          │          user u                                                      │                             │
+diff --git a/internal/app/testdata/TestManagerGroups.golden b/internal/app/testdata/TestManagerGroups.golden
+index b2f23f72fa..ead9832a9c 100644
+--- a/internal/app/testdata/TestManagerGroups.golden
++++ b/internal/app/testdata/TestManagerGroups.golden
+@@ -13,7 +13,7 @@
+ │       ▸  schema_migrations ┌─ 连接 ───────────────────────────────────────────────────────────────────────────────────────────┐                             │
+ │       ▸  t_order       1.2m│  doraemon               │          name doraemon                                               │                             │
+ │       ▸  t_order_item  3.4m│  misc                   │         group                                                        │                             │
+-│       ▸  t_payment     410k│ ── prod ──────────────── │        engine  postgres │ mysql │ sqlite │ redis │ mssql             │                             │
++│       ▸  t_payment     410k│ ── prod ──────────────── │        engine  postgres │ mysql │ sqlite │ redis │ mssql │ gaussdb   │                             │
+ │       ▸  t_refund       12k│  stage                  │          host h                                                      │                             │
+ │       ▸  t_sku         8.1k│  live                   │          port 5433                                                   │                             │
+ │       ▸  t_user         38k│ ── dev ───────────────── │          user u                                                      │                             │
+diff --git a/internal/app/testdata/TestNoConnectionStart/form.golden b/internal/app/testdata/TestNoConnectionStart/form.golden
+index fd5e97e109..7e88d4ca42 100644
+--- a/internal/app/testdata/TestNoConnectionStart/form.golden
++++ b/internal/app/testdata/TestNoConnectionStart/form.golden
+@@ -15,7 +15,7 @@
+ │                             ┌─ 连接 ───────────────────────────────────────────────────────────────────────────────────────────┐                             │
+ │                             │  新建                   │          name                                                        │                             │
+ │                             │                          │         group                                                        │                             │
+-│                             │                          │        engine  postgres │ mysql │ sqlite │ redis │ mssql             │                             │
++│                             │                          │        engine  postgres │ mysql │ sqlite │ redis │ mssql │ gaussdb   │                             │
+ │                             │                          │          host                                                        │                             │
+ │                             │                          │          port 5432                                                   │                             │
+ │                             │                          │          user                                                        │t                            │
+diff --git a/internal/app/workspace.go b/internal/app/workspace.go
+index 4ced1dacfd..09e393bb5f 100644
+--- a/internal/app/workspace.go
++++ b/internal/app/workspace.go
+@@ -18,6 +18,7 @@
+ 	"github.com/kackerx/sqlmux/internal/config"
+ 	"github.com/kackerx/sqlmux/internal/db"
+ 	dbexec "github.com/kackerx/sqlmux/internal/db/exec"
++	"github.com/kackerx/sqlmux/internal/db/gaussdb"
+ 	"github.com/kackerx/sqlmux/internal/db/mssql"
+ 	"github.com/kackerx/sqlmux/internal/db/mysql"
+ 	"github.com/kackerx/sqlmux/internal/db/postgres"
+@@ -472,7 +473,7 @@ func (c *Conn) liveSpec() config.Connection {
+ }
+ 
+ // drivers are the servers connections.toml names (§8.1, §5「连接缝」).
+-var drivers = map[string]db.Driver{"postgres": postgres.Engine{}, "mysql": mysql.Engine{}, "sqlite": sqlite.Engine{}, "redis": redis.Driver{}, "mssql": mssql.Engine{}}
++var drivers = map[string]db.Driver{"postgres": postgres.Engine{}, "gaussdb": gaussdb.Engine{}, "mysql": mysql.Engine{}, "sqlite": sqlite.Engine{}, "redis": redis.Driver{}, "mssql": mssql.Engine{}}
+ 
+ // driverOf is the driver of spec's engine: an exec connection's is the engine of its
+ // dialect over its command (§8.8).
+@@ -883,6 +884,8 @@ func connectTo(ctx context.Context, spec config.Connection, readOnly bool) (db.C
+ 	if spec.Database != "" { // a child of the connection in the tree: PG's database, Redis's db (F15.1, F16.2)
+ 		withDB := postgres.WithDatabase
+ 		switch spec.Kind() {
++		case "gaussdb":
++			withDB = gaussdb.WithDatabase
+ 		case "redis":
+ 			withDB = redis.WithDB
+ 		case "mssql": // the DSN's database parameter (F18.6)
+diff --git a/internal/config/connections.go b/internal/config/connections.go
+index 03e219f25f..95b86c2095 100644
+--- a/internal/config/connections.go
++++ b/internal/config/connections.go
+@@ -230,8 +230,8 @@ func (c Connection) Check(names []string) (field, problem string) {
+ 	if c.Group != "" && checkFileName(c.Group) != nil { // the characters of a name (F10.6)
+ 		return "group", fmt.Sprintf(i18n.T(`group = %q：不能含 / 或 \，也不能以 . 开头`), c.Group)
+ 	}
+-	if !slices.Contains([]string{"postgres", "mysql", "sqlite", "redis", "exec", "mssql"}, c.Engine) {
+-		return "engine", fmt.Sprintf(i18n.T("engine = %q：只能是 postgres、mysql、sqlite、redis、mssql 或 exec"), c.Engine)
++	if !slices.Contains([]string{"postgres", "gaussdb", "mysql", "sqlite", "redis", "exec", "mssql"}, c.Engine) {
++		return "engine", fmt.Sprintf(i18n.T("engine = %q：只能是 postgres、gaussdb、mysql、sqlite、redis、mssql 或 exec"), c.Engine)
+ 	}
+ 	if c.Engine == "exec" {
+ 		place := map[string]string{"postgres": "{sql}", "redis": "{cmd}"}[c.Dialect]
+@@ -247,10 +247,10 @@ func (c Connection) Check(names []string) (field, problem string) {
+ 		return "command", i18n.T("dialect 和 command 只对 exec 连接有用")
+ 	}
+ 	if (len(c.Databases) > 0 || len(c.Schemas) > 0) && (c.Kind() == "redis" || c.Kind() == "sqlite") {
+-		return "schemas", i18n.T("databases 和 schemas 只对 postgres、mysql 和 mssql 连接有用")
++		return "schemas", i18n.T("databases 和 schemas 只对 postgres、gaussdb、mysql 和 mssql 连接有用")
+ 	}
+-	if len(c.Databases) > 0 && c.Kind() != "postgres" && c.Kind() != "mssql" {
+-		return "databases", i18n.T("databases 只对 postgres 和 mssql 连接有用")
++	if len(c.Databases) > 0 && c.Kind() != "postgres" && c.Kind() != "gaussdb" && c.Kind() != "mssql" {
++		return "databases", i18n.T("databases 只对 postgres、gaussdb 和 mssql 连接有用")
+ 	}
+ 	if c.Delimiter != "" && c.Engine != "redis" {
+ 		return "delimiter", i18n.T("delimiter 只对 redis 连接有用")
+diff --git a/internal/config/connections_test.go b/internal/config/connections_test.go
+index 4ba1e0ae2f..74d075b4d8 100644
+--- a/internal/config/connections_test.go
++++ b/internal/config/connections_test.go
+@@ -66,7 +66,7 @@ func TestLoadConnectionErrors(t *testing.T) {
+ 		"":                               "里面没有 [[connection]]",
+ 		"[[connection]]\nname = \"a\"\n": "第 1 个连接：缺少 engine",
+ 		"[[connection]]\nengine = \"postgres\"\n":                                       "第 1 个连接：缺少 name",
+-		"[[connection]]\nname = \"a\"\nengine = \"oracle\"\ndsn = \"x\"\n":              `第 1 个连接：engine = "oracle"：只能是 postgres、mysql、sqlite、redis、mssql 或 exec`,
++		"[[connection]]\nname = \"a\"\nengine = \"oracle\"\ndsn = \"x\"\n":              `第 1 个连接：engine = "oracle"：只能是 postgres、gaussdb、mysql、sqlite、redis、mssql 或 exec`,
+ 		"[[connection]]\nname = \"a/b\"\nengine = \"postgres\"\ndsn = \"x\"\n":          `第 1 个连接：name = "a/b"：不能含 / 或 \，也不能以 . 开头`,
+ 		"[[connection]]\nname = 'a\\b'\nengine = \"postgres\"\ndsn = \"x\"\n":           `第 1 个连接：name = "a\\b"：不能含 / 或 \，也不能以 . 开头`,
+ 		"[[connection]]\nname = \"..\"\nengine = \"postgres\"\ndsn = \"x\"\n":           `第 1 个连接：name = ".."：不能含 / 或 \，也不能以 . 开头`,
+diff --git a/internal/config/temp.go b/internal/config/temp.go
+index 978ec43214..2310e0c300 100644
+--- a/internal/config/temp.go
++++ b/internal/config/temp.go
+@@ -37,9 +37,9 @@ func TempConnection(target string, taken []string) (Connection, error) {
+ 		c.Engine, c.DSN = "sqlite", target
+ 		return named(c, strings.TrimSuffix(base, filepath.Ext(base)), base, taken), nil
+ 	}
+-	engine, ok := map[string]string{"postgres": "postgres", "postgresql": "postgres", "mysql": "mysql", "redis": "redis", "rediss": "redis"}[scheme]
++	engine, ok := map[string]string{"postgres": "postgres", "postgresql": "postgres", "gaussdb": "gaussdb", "opengauss": "gaussdb", "mysql": "mysql", "redis": "redis", "rediss": "redis"}[scheme]
+ 	if !ok {
+-		return Connection{}, fmt.Errorf(i18n.T("不认识的 URL %s://：只有 postgres://、mysql://、redis:// 和 SQLite 的文件"), scheme)
++		return Connection{}, fmt.Errorf(i18n.T("不认识的 URL %s://：支持 postgres://、gaussdb://、opengauss://、mysql://、redis:// 和 SQLite 的文件"), scheme)
+ 	}
+ 	u, err := url.Parse(target)
+ 	if ue := (*url.Error)(nil); errors.As(err, &ue) {
+diff --git a/internal/config/temp_test.go b/internal/config/temp_test.go
+index 2df1687d1f..45916e132e 100644
+--- a/internal/config/temp_test.go
++++ b/internal/config/temp_test.go
+@@ -14,6 +14,8 @@ func TestTempConnection(t *testing.T) {
+ 		"~/notes":                         {Name: "notes", Engine: "sqlite", DSN: "~/notes", Temp: true},
+ 		"postgres://u:pw@db.example:5432/shop?x=1": {Name: "shop@db.example", Engine: "postgres", DSN: "postgres://u:pw@db.example:5432/shop?x=1", Temp: true},
+ 		"postgresql://localhost/app":               {Name: "app@localhost", Engine: "postgres", DSN: "postgresql://localhost/app", Temp: true},
++		"gaussdb://u@localhost:8000/app":           {Name: "app@localhost", Engine: "gaussdb", DSN: "gaussdb://u@localhost:8000/app", Temp: true},
++		"opengauss://u@localhost:5432/app":         {Name: "app@localhost", Engine: "gaussdb", DSN: "opengauss://u@localhost:5432/app", Temp: true},
+ 		"mysql://root@127.0.0.1:3306/":             {Name: "127.0.0.1", Engine: "mysql", DSN: "mysql://root@127.0.0.1:3306/", Temp: true},
+ 		"mysql:///tmp/sock":                        {Name: "mysql", Engine: "mysql", DSN: "mysql:///tmp/sock", Temp: true},
+ 		`D:/x.db`:                                  {Name: "x", Engine: "sqlite", DSN: `D:/x.db`, Temp: true}, // a windows drive, both separators taken
+diff --git a/internal/db/gaussdb/catalog.go b/internal/db/gaussdb/catalog.go
+new file mode 100644
+index 0000000000..0967a155ba
+--- /dev/null
++++ b/internal/db/gaussdb/catalog.go
+@@ -0,0 +1,122 @@ func (Engine) Schemas(ctx context.Context, c db.Conn) (schemas []string, current
++package gaussdb
++
++import (
++	"context"
++	"encoding/json"
++	"strconv"
++
++	"github.com/kackerx/sqlmux/internal/db"
++	"github.com/kackerx/sqlmux/internal/sqlkit"
++)
++
++const userSchema = `n.nspname !~ '^pg_' and n.nspname not in ('information_schema', 'dbe_perf', 'db4ai', 'cstore', 'snapshot', 'blockchain', 'dbe_pldebugger', 'sqladvisor')`
++
++func (Engine) Schemas(ctx context.Context, c db.Conn) (schemas []string, current string, err error) {
++	r, err := c.Query(ctx, `select n.nspname, coalesce(current_schema(), '') from pg_namespace n where `+userSchema+` order by 1`)
++	if err != nil {
++		return nil, "", err
++	}
++	for _, row := range r.Rows {
++		schemas, current = append(schemas, row[0].S), row[1].S
++	}
++	return schemas, current, nil
++}
++
++func (Engine) Tables(ctx context.Context, c db.Conn, only []string) ([]db.Table, error) {
++	// GaussDB records partitions in pg_partition, not as pg_class children.
++	r, err := c.Query(ctx, `
++select n.nspname, c.relname, c.reltuples,
++       case when c.relkind = 'r' and c.parttype in ('p', 's') then 'p' else c.relkind end
++from pg_class c join pg_namespace n on n.oid = c.relnamespace
++where c.relkind in ('r', 'v', 'm', 'f') and `+userSchema+db.SchemaIn("n.nspname", only, sqlkit.PG)+`
++order by 1, 2`)
++	if err != nil {
++		return nil, err
++	}
++	ts := make([]db.Table, len(r.Rows))
++	for i, row := range r.Rows {
++		rows, err := strconv.ParseFloat(row[2].S, 64)
++		if err != nil {
++			return nil, err
++		}
++		ts[i] = db.Table{Schema: row[0].S, Name: row[1].S, Rows: rows, Kind: row[3].S}
++	}
++	return ts, nil
++}
++
++func (Engine) TableColumns(ctx context.Context, c db.Conn, schema, table string) (db.Columns, error) {
++	var out db.Columns
++	// Catalog fields are backported independently across GaussDB versions.
++	// Reading optional fields through JSON works over any db.Conn, including
++	// the app's Worker, without assuming its concrete driver connection.
++	identity := "coalesce(row_to_json(a)->>'attidentity', ' ')"
++	r, err := c.Query(ctx, `
++select a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
++       coalesce(pg_get_expr(d.adbin, d.adrelid), case `+identity+` when 'a' then 'generated always as identity' when 'd' then 'generated by default as identity' else '' end),
++       (select json_agg(e.enumlabel order by e.enumsortorder) from pg_enum e where e.enumtypid = a.atttypid),
++       d.adgencol = 's' or `+identity+` = 'a'
++from pg_attribute a
++join pg_class c on c.oid = a.attrelid
++join pg_namespace n on n.oid = c.relnamespace
++left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
++where n.nspname = $1 and c.relname = $2 and a.attnum > 0 and not a.attisdropped
++order by a.attnum`, db.Val{S: schema}, db.Val{S: table})
++	if err != nil {
++		return out, err
++	}
++	for _, row := range r.Rows {
++		col := db.Column{Name: row[0].S, Type: row[1].S, NotNull: row[2].S == "t", Default: row[3].S, Generated: row[5].S == "t"}
++		if !row[4].Null {
++			if err := json.Unmarshal([]byte(row[4].S), &col.Enum); err != nil {
++				return out, err
++			}
++		}
++		out.Cols = append(out.Cols, col)
++	}
++	return columnKeys(ctx, c, schema, table, out)
++}
++
++func columnKeys(ctx context.Context, c db.Conn, schema, table string, out db.Columns) (db.Columns, error) {
++	// int2vector starts at 0, constraint arrays at 1. generate_subscripts
++	// preserves both without relying on PostgreSQL's WITH ORDINALITY.
++	nkeys := "coalesce((row_to_json(i)->>'indnkeyatts')::int, i.indnatts)"
++	r, err := c.Query(ctx, `
++select con.contype, (
++    select json_agg(a.attname order by k.n)
++    from generate_subscripts(con.conkey, 1) k(n)
++    join pg_attribute a on a.attrelid = con.conrelid and a.attnum = con.conkey[k.n]), con.oid
++from pg_constraint con
++join pg_class c on c.oid = con.conrelid
++join pg_namespace n on n.oid = c.relnamespace
++where n.nspname = $1 and c.relname = $2 and con.contype = 'p'
++union all
++select 'u', (
++    select json_agg(a.attname order by k.n)
++    from generate_series(0, `+nkeys+` - 1) k(n)
++    join pg_attribute a on a.attrelid = i.indrelid and a.attnum = i.indkey[k.n]), i.indexrelid
++from pg_index i
++join pg_class c on c.oid = i.indrelid
++join pg_namespace n on n.oid = c.relnamespace
++where n.nspname = $1 and c.relname = $2
++  and i.indisunique and not i.indisprimary and i.indisvalid and i.indpred is null
++  and not exists (
++    select 1 from generate_series(0, `+nkeys+` - 1) k(n)
++    left join pg_attribute a on a.attrelid = i.indrelid and a.attnum = i.indkey[k.n]
++    where i.indkey[k.n] = 0 or not coalesce(a.attnotnull, false))
++order by 1, 3`, db.Val{S: schema}, db.Val{S: table})
++	if err != nil {
++		return out, err
++	}
++	for _, row := range r.Rows {
++		var cols []string
++		if err := json.Unmarshal([]byte(row[1].S), &cols); err != nil {
++			return out, err
++		}
++		if row[0].S == "p" {
++			out.PK = cols
++		} else {
++			out.Unique = append(out.Unique, cols)
++		}
++	}
++	return out, nil
++}
+diff --git a/internal/db/gaussdb/catalog_test.go b/internal/db/gaussdb/catalog_test.go
+new file mode 100644
+index 0000000000..59f9c0c1dc
+--- /dev/null
++++ b/internal/db/gaussdb/catalog_test.go
+@@ -0,0 +1,130 @@ func fixture(t *testing.T) (*Conn, string) {
++//go:build integration
++
++package gaussdb
++
++import (
++	"context"
++	"fmt"
++	"os"
++	"reflect"
++	"slices"
++	"strings"
++	"sync/atomic"
++	"testing"
++
++	"github.com/kackerx/sqlmux/internal/db"
++)
++
++var schemaID atomic.Uint64
++var engine = Engine{}
++
++func fixture(t *testing.T) (*Conn, string) {
++	t.Helper()
++	c := connect(t, false)
++	schema := fmt.Sprintf("sqlmux_gauss_%d_%d", os.Getpid(), schemaID.Add(1))
++	query(t, c, "create schema "+engine.Quote(schema))
++	t.Cleanup(func() { query(t, c, "drop schema "+engine.Quote(schema)+" cascade") })
++	query(t, c, "set search_path to "+engine.Quote(schema))
++	_, err := c.Exec(context.Background(), `
++create type state as enum ('pending', 'done');
++create table parent (a int, b int, primary key (b, a)) with (storage_type=astore);
++create table items (
++ id int primary key, code text not null, amount numeric(12,2), note text,
++ state state default 'pending', a int, b int,
++ generated int generated always as (id + 1) stored,
++ foreign key (b, a) references parent(b, a)) with (storage_type=ustore);
++create unique index items_code on items using ubtree(code) include(note);
++create unique index items_nullable on items(note);
++create index items_expression on items((lower(code)));
++create view item_view as select id, code from items;
++create materialized view item_summary with (storage_type=astore) as select count(*) as n from parent;
++create sequence item_seq;
++create function sample() returns text as $$ select E'a\\b'::text $$ language sql;
++insert into items(id, code, amount, note) values (1, 'first', 1.50, 'before'), (2, 'second', 2.50, null);
++`, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return c, schema
++}
++
++func TestCatalogListsObjectsAndPreservesKeyOrder(t *testing.T) {
++	c, schema := fixture(t)
++	ctx := context.Background()
++	tables, err := engine.Tables(ctx, c, []string{schema})
++	if err != nil {
++		t.Fatal(err)
++	}
++	var names []string
++	for _, table := range tables {
++		names = append(names, table.Name+":"+table.Kind)
++	}
++	if !reflect.DeepEqual(names, []string{"item_summary:m", "item_view:v", "items:r", "parent:r"}) {
++		t.Fatalf("tables %v", names)
++	}
++	cs, err := engine.TableColumns(ctx, db.NewWorker(c), schema, "items")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !reflect.DeepEqual(cs.PK, []string{"id"}) || !reflect.DeepEqual(cs.Unique, [][]string{{"code"}}) {
++		t.Errorf("row identity pk=%v unique=%v", cs.PK, cs.Unique)
++	}
++	if len(cs.Cols) != 8 || cs.Cols[2].Type != "numeric(12,2)" || !cs.Cols[7].Generated || !reflect.DeepEqual(cs.Cols[4].Enum, []string{"pending", "done"}) {
++		t.Errorf("columns %+v", cs.Cols)
++	}
++	parent, err := engine.TableColumns(ctx, c, schema, "parent")
++	if err != nil || !reflect.DeepEqual(parent.PK, []string{"b", "a"}) {
++		t.Errorf("composite primary key %v: %v", parent.PK, err)
++	}
++	keys, err := engine.Keys(ctx, c, schema, "items")
++	if err != nil {
++		t.Fatal(err)
++	}
++	fk := slices.IndexFunc(keys, func(k db.Key) bool { return k.Ref != nil })
++	if fk < 0 || !reflect.DeepEqual(keys[fk].Cols, []string{"b", "a"}) || !reflect.DeepEqual(keys[fk].Ref.Cols, []string{"b", "a"}) {
++		t.Errorf("foreign keys %+v", keys)
++	}
++	indexes, err := engine.Indexes(ctx, c, schema, "items")
++	if err != nil {
++		t.Fatal(err)
++	}
++	code := slices.IndexFunc(indexes, func(ix db.Index) bool { return ix.Name == "items_code" })
++	if code < 0 || !reflect.DeepEqual(indexes[code].Cols, []string{"code"}) {
++		t.Errorf("INCLUDE index %+v", indexes)
++	}
++	seqs, err := engine.Sequences(ctx, c, []string{schema})
++	if err != nil || !reflect.DeepEqual(seqs, []db.Sequence{{Schema: schema, Name: "item_seq"}}) {
++		t.Errorf("sequences %+v: %v", seqs, err)
++	}
++	if empty, err := engine.Tables(ctx, c, []string{}); err != nil || len(empty) != 0 {
++		t.Errorf("empty schema selection %+v: %v", empty, err)
++	}
++}
++
++func TestNativeDefinitionsRetainGeneratedColumnsAndFunctionBody(t *testing.T) {
++	c, schema := fixture(t)
++	ctx := context.Background()
++	def, err := engine.DDL(ctx, c, schema, "items")
++	if err != nil || !strings.Contains(strings.ToLower(def), "generated always") || !strings.Contains(def, "items_code") {
++		t.Fatalf("table DDL %q: %v", def, err)
++	}
++	for _, name := range []string{"item_view", "item_summary"} {
++		def, err := engine.DDL(ctx, c, schema, name)
++		if err != nil || !strings.Contains(def, name) || !strings.Contains(strings.ToLower(def), "select") {
++			t.Errorf("%s DDL %q: %v", name, def, err)
++		}
++	}
++	funcs, err := engine.Functions(ctx, c, []string{schema})
++	if err != nil || len(funcs) != 1 || funcs[0].Name != "sample" {
++		t.Fatalf("functions %+v: %v", funcs, err)
++	}
++	def, err = engine.FunctionDef(ctx, c, funcs[0])
++	if err != nil {
++		t.Fatal(err)
++	}
++	// Executing the deparsed function proves record escaping did not alter its body.
++	query(t, c, def)
++	if got := query(t, c, "select sample()").Rows[0][0].S; got != "a\\b" {
++		t.Errorf("function body round trip %q", got)
++	}
++}
+diff --git a/internal/db/gaussdb/dsn_test.go b/internal/db/gaussdb/dsn_test.go
+new file mode 100644
+index 0000000000..53252cced6
+--- /dev/null
++++ b/internal/db/gaussdb/dsn_test.go
+@@ -0,0 +1,32 @@ func TestWithDatabasePreservesCredentialsAndTLS(t *testing.T) {
++package gaussdb
++
++import (
++	"testing"
++
++	"github.com/HuaweiCloudDeveloper/gaussdb-go/gaussdbconn"
++)
++
++func TestWithDatabasePreservesCredentialsAndTLS(t *testing.T) {
++	for _, scheme := range []string{"gaussdb", "opengauss", "postgres", "postgresql"} {
++		dsn := scheme + "://app:p%40ss@db.example:30100/original?dbname=override&sslmode=verify-full"
++		next, err := WithDatabase(dsn, "other db")
++		if err != nil {
++			t.Fatal(err)
++		}
++		cfg, err := gaussdbconn.ParseConfig(next)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if cfg.Database != "other db" || cfg.Host != "db.example" || cfg.Port != 30100 || cfg.User != "app" || cfg.Password != "p@ss" || cfg.TLSConfig == nil || cfg.TLSConfig.InsecureSkipVerify {
++			t.Errorf("%s lost connection options", scheme)
++		}
++	}
++	dsn, err := WithDatabase("host=db.example user=app dbname=original sslmode=disable", "other'name")
++	if err != nil {
++		t.Fatal(err)
++	}
++	cfg, err := gaussdbconn.ParseConfig(dsn)
++	if err != nil || cfg.Database != "other'name" {
++		t.Errorf("keyword DSN database: %v", err)
++	}
++}
+diff --git a/internal/db/gaussdb/error.go b/internal/db/gaussdb/error.go
+new file mode 100644
+index 0000000000..6f7c3188f9
+--- /dev/null
++++ b/internal/db/gaussdb/error.go
+@@ -0,0 +1,51 @@ func (Engine) ErrorOf(err error) db.ServerError {
++package gaussdb
++
++import (
++	"context"
++	"errors"
++	"strings"
++
++	"github.com/HuaweiCloudDeveloper/gaussdb-go/gaussdbconn"
++
++	"github.com/kackerx/sqlmux/internal/db"
++)
++
++var errClosed = errors.New("GaussDB connection closed")
++
++func (Engine) ErrorOf(err error) db.ServerError {
++	var pe *gaussdbconn.GaussdbError
++	if !errors.As(err, &pe) {
++		return db.ServerError{Severity: "ERROR", Message: err.Error()}
++	}
++	e := db.ServerError{Severity: pe.Severity, Code: pe.Code, Message: pe.Message, Position: int(pe.Position)}
++	for _, line := range [][2]string{{"DETAIL", pe.Detail}, {"HINT", pe.Hint}} {
++		if line[1] != "" {
++			e.More = append(e.More, strings.Split(line[0]+": "+line[1], "\n")...)
++		}
++	}
++	return e
++}
++
++func (Engine) Broken(err error) db.Lost {
++	var pe *gaussdbconn.GaussdbError
++	switch {
++	case errors.As(err, &pe):
++		if pe.Severity == "FATAL" || pe.Severity == "PANIC" || strings.HasPrefix(pe.Code, "08") {
++			return db.LostSent
++		}
++	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
++		return db.NotLost
++	case errors.Is(err, errClosed):
++		return db.LostSent
++	case err.Error() == "conn closed":
++		// v1.0.0-rc1 does not export its connLockError sentinel. After a
++		// failed read it reports this retryable error, although a write
++		// may already have reached the server: never replay that write.
++		return db.LostSent
++	case gaussdbconn.SafeToRetry(err):
++		return db.LostUnsent
++	case db.NetworkError(err):
++		return db.LostSent
++	}
++	return db.NotLost
++}
+diff --git a/internal/db/gaussdb/error_test.go b/internal/db/gaussdb/error_test.go
+new file mode 100644
+index 0000000000..b726552cac
+--- /dev/null
++++ b/internal/db/gaussdb/error_test.go
+@@ -0,0 +1,47 @@ func TestErrorOfPreservesSQLStateAndDetail(t *testing.T) {
++package gaussdb
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"reflect"
++	"testing"
++
++	"github.com/HuaweiCloudDeveloper/gaussdb-go/gaussdbconn"
++
++	"github.com/kackerx/sqlmux/internal/db"
++)
++
++func TestErrorOfPreservesSQLStateAndDetail(t *testing.T) {
++	err := fmt.Errorf("query: %w", &gaussdbconn.GaussdbError{
++		Severity: "ERROR", Code: "23505", Message: "duplicate key", Detail: "Key (id)=(1) already exists.", Hint: "Choose another id.", Position: 17,
++	})
++	want := db.ServerError{Severity: "ERROR", Code: "23505", Message: "duplicate key", Position: 17,
++		More: []string{"DETAIL: Key (id)=(1) already exists.", "HINT: Choose another id."}}
++	if got := (Engine{}).ErrorOf(err); !reflect.DeepEqual(got, want) {
++		t.Errorf("server error %+v, want %+v", got, want)
++	}
++}
++
++func TestBrokenDoesNotReplayPossiblySentWrites(t *testing.T) {
++	for _, tc := range []struct {
++		name string
++		err  error
++		want db.Lost
++	}{
++		{"closed before next call", errClosed, db.LostSent},
++		{"driver closed while reading", errors.New("conn closed"), db.LostSent},
++		{"reply lost", io.EOF, db.LostSent},
++		{"server shutdown", &gaussdbconn.GaussdbError{Severity: "FATAL", Code: "57P01"}, db.LostSent},
++		{"connection exception", &gaussdbconn.GaussdbError{Severity: "ERROR", Code: "08006"}, db.LostSent},
++		{"constraint violation", &gaussdbconn.GaussdbError{Severity: "ERROR", Code: "23505"}, db.NotLost},
++		{"cancel", context.Canceled, db.NotLost},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			if got := (Engine{}).Broken(tc.err); got != tc.want {
++				t.Errorf("lost = %v, want %v", got, tc.want)
++			}
++		})
++	}
++}
+diff --git a/internal/db/gaussdb/gaussdb.go b/internal/db/gaussdb/gaussdb.go
+new file mode 100644
+index 0000000000..df88b83c4c
+--- /dev/null
++++ b/internal/db/gaussdb/gaussdb.go
+@@ -0,0 +1,99 @@ type Conn struct {
++// Package gaussdb adapts the native GaussDB wire driver to sqlmux's text protocol.
++package gaussdb
++
++import (
++	"context"
++	"fmt"
++	"strings"
++	"time"
++
++	"github.com/HuaweiCloudDeveloper/gaussdb-go/gaussdbconn"
++	"github.com/HuaweiCloudDeveloper/gaussdb-go/gaussdbconn/ctxwatch"
++
++	"github.com/kackerx/sqlmux/internal/db"
++	"github.com/kackerx/sqlmux/internal/db/postgres"
++)
++
++// Engine shares PostgreSQL SQL semantics, but uses GaussDB authentication and catalogs.
++type Engine struct{ postgres.Engine }
++
++type Conn struct {
++	pg *gaussdbconn.GaussdbConn
++}
++
++func (Engine) Connect(ctx context.Context, dsn, password string, readOnly bool) (db.Conn, db.Info, error) {
++	c, info, err := Connect(ctx, dsn, password, readOnly)
++	if err != nil {
++		return nil, db.Info{}, err
++	}
++	return c, info, nil
++}
++
++func Connect(ctx context.Context, dsn, password string, readOnly bool) (*Conn, db.Info, error) {
++	cfg, err := gaussdbconn.ParseConfig(normalizeDSN(dsn))
++	if err != nil {
++		return nil, db.Info{}, err
++	}
++	if password != "" {
++		cfg.Password = password
++	}
++	if _, ok := cfg.RuntimeParams["application_name"]; !ok {
++		cfg.RuntimeParams["application_name"] = "sqlmux"
++	}
++	if cfg.ConnectTimeout == 0 {
++		cfg.ConnectTimeout = 10 * time.Second
++	}
++	cfg.RuntimeParams["DateStyle"] = "ISO, YMD"
++	if readOnly {
++		cfg.RuntimeParams["default_transaction_read_only"] = "on"
++	}
++	cfg.BuildContextWatcherHandler = func(pg *gaussdbconn.GaussdbConn) ctxwatch.Handler {
++		return &gaussdbconn.CancelRequestContextWatcherHandler{Conn: pg, DeadlineDelay: 5 * time.Second}
++	}
++	if d, ok := db.DialerOf(ctx); ok {
++		cfg.DialFunc = gaussdbconn.DialFunc(d.Dial)
++		cfg.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
++	}
++	pg, err := gaussdbconn.ConnectConfig(ctx, cfg)
++	if err != nil {
++		return nil, db.Info{}, err
++	}
++	c := &Conn{pg: pg}
++	r, err := c.Query(ctx, "select current_setting('search_path'), current_database()")
++	if err != nil {
++		c.Close()
++		return nil, db.Info{}, err
++	}
++	return c, db.Info{Addr: fmt.Sprintf("%s@%s:%d", cfg.User, cfg.Host, cfg.Port), Database: r.Rows[0][1].S, Path: r.Rows[0][0].S}, nil
++}
++
++func normalizeDSN(dsn string) string {
++	for _, prefix := range []string{"postgres://", "postgresql://", "opengauss://"} {
++		if strings.HasPrefix(dsn, prefix) {
++			return "gaussdb://" + strings.TrimPrefix(dsn, prefix)
++		}
++	}
++	return dsn
++}
++
++func WithDatabase(dsn, name string) (string, error) {
++	// Reuse the URL/keyword handling, including query parameters that override dbname.
++	dsn = normalizeDSN(dsn)
++	if strings.HasPrefix(dsn, "gaussdb://") {
++		next, err := postgres.WithDatabase("postgres://"+strings.TrimPrefix(dsn, "gaussdb://"), name)
++		if err != nil {
++			return "", err
++		}
++		return normalizeDSN(next), nil
++	}
++	return postgres.WithDatabase(dsn, name)
++}
++
++func (c *Conn) Close() error { return c.pg.Close(context.Background()) }
++func (c *Conn) Closed() bool { return c.pg.IsClosed() }
++func (c *Conn) TxStatus() byte {
++	if c.Closed() {
++		return 'I'
++	}
++	return c.pg.TxStatus()
++}
+diff --git a/internal/db/gaussdb/gaussdb_test.go b/internal/db/gaussdb/gaussdb_test.go
+new file mode 100644
+index 0000000000..814e9de60d
+--- /dev/null
++++ b/internal/db/gaussdb/gaussdb_test.go
+@@ -0,0 +1,57 @@ func connect(t *testing.T, readOnly bool) *Conn {
++//go:build integration
++
++package gaussdb
++
++import (
++	"context"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"github.com/kackerx/sqlmux/internal/db"
++)
++
++func connect(t *testing.T, readOnly bool) *Conn {
++	t.Helper()
++	dsn := os.Getenv("SQLMUX_TEST_GAUSSDB")
++	if dsn == "" {
++		t.Skip("SQLMUX_TEST_GAUSSDB is not set")
++	}
++	for _, kv := range os.Environ() {
++		if key, _, _ := strings.Cut(kv, "="); strings.HasPrefix(key, "GAUSSDB_") {
++			t.Setenv(key, "")
++		}
++	}
++	t.Setenv("GAUSSDB_PASSFILE", filepath.Join(t.TempDir(), "none"))
++	c, _, err := Connect(context.Background(), dsn, "", readOnly)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { c.Close() })
++	return c
++}
++
++func query(t *testing.T, c db.Conn, sql string, args ...db.Val) db.Result {
++	t.Helper()
++	r, err := c.Query(context.Background(), sql, args...)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return r
++}
++
++func TestConnectReturnsServerText(t *testing.T) {
++	c := connect(t, false)
++	r := query(t, c, `select $1::numeric(12,2), $2::text, $3::text, current_setting('DateStyle'), current_setting('application_name')`,
++		db.Val{S: "1.50"}, db.Val{S: "text"}, db.Val{Null: true})
++	want := []db.Val{{S: "1.50"}, {S: "text"}, {Null: true}, {S: "ISO, YMD"}, {S: "sqlmux"}}
++	for i, v := range want {
++		if r.Rows[0][i] != v {
++			t.Errorf("column %d = %+v, want %+v", i, r.Rows[0][i], v)
++		}
++	}
++	if r.Cols[0].Type != "numeric" || c.TxStatus() != 'I' {
++		t.Fatalf("columns %v, transaction %c", r.Cols, c.TxStatus())
++	}
++}
+diff --git a/internal/db/gaussdb/network_test.go b/internal/db/gaussdb/network_test.go
+new file mode 100644
+index 0000000000..a71e227065
+--- /dev/null
++++ b/internal/db/gaussdb/network_test.go
+@@ -0,0 +1,57 @@ func TestSSHTunnelCarriesAuthenticationQueriesAndCancellation(t *testing.T) {
++//go:build integration
++
++package gaussdb
++
++import (
++	"context"
++	"os"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/kackerx/sqlmux/internal/db"
++)
++
++func TestSSHTunnelCarriesAuthenticationQueriesAndCancellation(t *testing.T) {
++	// connect clears the driver's ambient configuration before the tunnel test.
++	connect(t, true)
++	dsn := os.Getenv("SQLMUX_TEST_GAUSSDB")
++	db.NCSSH(t)
++	dsn = strings.ReplaceAll(dsn, "localhost", "db.internal.invalid")
++	ctx := db.WithDialer(context.Background(), db.SSHDialer("app@jump"))
++	c, _, err := Connect(ctx, dsn, "", false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer c.Close()
++	query(t, c, "select 1")
++	cancelCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
++	defer cancel()
++	if _, err := c.Query(cancelCtx, "select pg_sleep(30)"); err == nil || engine.ErrorOf(err).Code != "57014" {
++		t.Fatalf("cancellation through tunnel: %v", err)
++	}
++	if got := query(t, c, "select 2").Rows[0][0].S; got != "2" {
++		t.Errorf("after tunneled cancellation: %q", got)
++	}
++}
++
++func TestWorkerReconnectsAfterServerTerminatesBackend(t *testing.T) {
++	c := connect(t, false)
++	admin := connect(t, false)
++	ctx := context.Background()
++	pid := query(t, c, "select pg_backend_pid()").Rows[0][0]
++	w := db.NewWorker(c)
++	w.Broken = engine.Broken
++	w.Redial = func(ctx context.Context) (db.Conn, error) {
++		next, _, err := Connect(ctx, os.Getenv("SQLMUX_TEST_GAUSSDB"), "", false)
++		return next, err
++	}
++	defer w.Close()
++	if got := query(t, admin, "select pg_terminate_backend($1::bigint)", pid).Rows[0][0].S; got != "t" {
++		t.Fatalf("backend termination %q", got)
++	}
++	r, err := w.Query(ctx, "select 42")
++	if err != nil || len(r.Rows) != 1 || r.Rows[0][0].S != "42" {
++		t.Fatalf("query after reconnection %+v: %v", r, err)
++	}
++}
+diff --git a/internal/db/gaussdb/objects.go b/internal/db/gaussdb/objects.go
+new file mode 100644
+index 0000000000..b9b529c1b1
+--- /dev/null
++++ b/internal/db/gaussdb/objects.go
+@@ -0,0 +1,172 @@ func (e Engine) DDL(ctx context.Context, c db.Conn, schema, name string) (string
++package gaussdb
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"strings"
++
++	"github.com/kackerx/sqlmux/internal/db"
++	"github.com/kackerx/sqlmux/internal/i18n"
++	"github.com/kackerx/sqlmux/internal/sqlkit"
++)
++
++func (e Engine) DDL(ctx context.Context, c db.Conn, schema, name string) (string, error) {
++	rel := db.Val{S: e.Quote(schema, name)}
++	r, err := c.Query(ctx, "select relkind from pg_class where oid = $1::regclass", rel)
++	if err != nil {
++		return "", err
++	}
++	if r.Rows[0][0].S == "v" || r.Rows[0][0].S == "m" {
++		kind := "view"
++		if r.Rows[0][0].S == "m" {
++			kind = "materialized view"
++		}
++		r, err = c.Query(ctx, "select pg_get_viewdef($1::regclass, true)", rel)
++		if err != nil {
++			return "", err
++		}
++		def := "create " + kind + " " + rel.S + " as\n" + r.Rows[0][0].S
++		if kind == "materialized view" {
++			indexes, err := e.Indexes(ctx, c, schema, name)
++			if err != nil {
++				return "", err
++			}
++			for _, index := range indexes {
++				def += "\n" + index.Def
++			}
++		}
++		notes, err := c.Query(ctx, `
++select null::text, quote_literal(obj_description($1::regclass, 'pg_class')), 0
++where obj_description($1::regclass, 'pg_class') is not null
++union all
++select quote_ident(a.attname), quote_literal(col_description(a.attrelid, a.attnum)), a.attnum
++from pg_attribute a
++where a.attrelid = $1::regclass and a.attnum > 0 and not a.attisdropped and col_description(a.attrelid, a.attnum) is not null
++order by 3`, rel)
++		if err != nil {
++			return "", err
++		}
++		for _, note := range notes.Rows {
++			if note[0].Null {
++				def += "\ncomment on " + kind + " " + rel.S + " is " + note[1].S + ";"
++			} else {
++				def += "\ncomment on column " + rel.S + "." + note[0].S + " is " + note[1].S + ";"
++			}
++		}
++		return def, nil
++	}
++	// The native deparser retains GaussDB partitioning and storage options.
++	r, err = c.Query(ctx, "select pg_get_tabledef($1::text)", rel)
++	if err != nil {
++		return "", err
++	}
++	return r.Rows[0][0].S, nil
++}
++
++func (Engine) Indexes(ctx context.Context, c db.Conn, schema, table string) ([]db.Index, error) {
++	r, err := c.Query(ctx, `
++select ic.relname, ix.indisunique, pg_get_indexdef(ix.indexrelid),
++       (select json_agg(pg_get_indexdef(ix.indexrelid, k, true) order by k)
++        from generate_series(1, coalesce((row_to_json(ix)->>'indnkeyatts')::int, ix.indnatts)) k)
++from pg_index ix
++join pg_class ic on ic.oid = ix.indexrelid
++join pg_class c on c.oid = ix.indrelid
++join pg_namespace n on n.oid = c.relnamespace
++where n.nspname = $1 and c.relname = $2
++order by ic.relname`, db.Val{S: schema}, db.Val{S: table})
++	if err != nil {
++		return nil, err
++	}
++	var out []db.Index
++	for _, row := range r.Rows {
++		ix := db.Index{Name: row[0].S, Unique: row[1].S == "t", Def: row[2].S + ";"}
++		if err := json.Unmarshal([]byte(row[3].S), &ix.Cols); err != nil {
++			return nil, err
++		}
++		out = append(out, ix)
++	}
++	return out, nil
++}
++
++func (Engine) Keys(ctx context.Context, c db.Conn, schema, table string) ([]db.Key, error) {
++	r, err := c.Query(ctx, `
++select con.conname, con.contype, rn.nspname, rc.relname,
++       (select json_agg(a.attname order by k.n)
++        from generate_subscripts(con.conkey, 1) k(n)
++        join pg_attribute a on a.attrelid = con.conrelid and a.attnum = con.conkey[k.n]),
++       (select json_agg(a.attname order by k.n)
++        from generate_subscripts(con.confkey, 1) k(n)
++        join pg_attribute a on a.attrelid = con.confrelid and a.attnum = con.confkey[k.n])
++from pg_constraint con
++join pg_class c on c.oid = con.conrelid
++join pg_namespace n on n.oid = c.relnamespace
++left join pg_class rc on rc.oid = con.confrelid
++left join pg_namespace rn on rn.oid = rc.relnamespace
++where n.nspname = $1 and c.relname = $2 and con.contype in ('p', 'f')
++order by con.contype, con.conname`, db.Val{S: schema}, db.Val{S: table})
++	if err != nil {
++		return nil, err
++	}
++	var out []db.Key
++	for _, row := range r.Rows {
++		key := db.Key{Name: row[0].S}
++		if err := json.Unmarshal([]byte(row[4].S), &key.Cols); err != nil {
++			return nil, err
++		}
++		if row[1].S == "f" {
++			key.Ref = &db.Ref{Schema: row[2].S, Table: row[3].S}
++			if err := json.Unmarshal([]byte(row[5].S), &key.Ref.Cols); err != nil {
++				return nil, err
++			}
++		}
++		out = append(out, key)
++	}
++	return out, nil
++}
++
++func (Engine) Functions(ctx context.Context, c db.Conn, only []string) ([]db.Function, error) {
++	r, err := c.Query(ctx, `
++select n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), p.oid::text
++from pg_proc p join pg_namespace n on n.oid = p.pronamespace
++where not p.proisagg and not p.proiswindow and `+userSchema+db.SchemaIn("n.nspname", only, sqlkit.PG)+`
++  and not exists (select 1 from pg_depend d where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
++order by 1, 2, 3`)
++	if err != nil {
++		return nil, err
++	}
++	out := make([]db.Function, len(r.Rows))
++	for i, row := range r.Rows {
++		out[i] = db.Function{Schema: row[0].S, Name: row[1].S, Args: row[2].S, ID: row[3].S}
++	}
++	return out, nil
++}
++
++func (Engine) FunctionDef(ctx context.Context, c db.Conn, f db.Function) (string, error) {
++	// GaussDB returns (headerlines, definition), not PostgreSQL's scalar
++	// text. Selecting the record itself would escape the function body.
++	r, err := c.Query(ctx, "select definition from pg_get_functiondef($1::oid)", db.Val{S: f.ID})
++	if err != nil {
++		return "", err
++	}
++	if len(r.Rows) == 0 || r.Rows[0][0].Null {
++		return "", errors.New(i18n.T("函数已不存在，按 R 刷新"))
++	}
++	return strings.TrimRight(r.Rows[0][0].S, "; \t\r\n") + ";", nil
++}
++
++func (Engine) Sequences(ctx context.Context, c db.Conn, only []string) ([]db.Sequence, error) {
++	r, err := c.Query(ctx, `
++select n.nspname, cl.relname
++from pg_class cl join pg_namespace n on n.oid = cl.relnamespace
++where cl.relkind in ('S', 'L') and `+userSchema+db.SchemaIn("n.nspname", only, sqlkit.PG)+`
++order by 1, 2`)
++	if err != nil {
++		return nil, err
++	}
++	out := make([]db.Sequence, len(r.Rows))
++	for i, row := range r.Rows {
++		out[i] = db.Sequence{Schema: row[0].S, Name: row[1].S}
++	}
++	return out, nil
++}
+diff --git a/internal/db/gaussdb/partition_test.go b/internal/db/gaussdb/partition_test.go
+new file mode 100644
+index 0000000000..11f72a87fc
+--- /dev/null
++++ b/internal/db/gaussdb/partition_test.go
+@@ -0,0 +1,37 @@ func TestPartitionParentAndNativeDefinition(t *testing.T) {
++//go:build integration
++
++package gaussdb
++
++import (
++	"context"
++	"strings"
++	"testing"
++)
++
++func TestPartitionParentAndNativeDefinition(t *testing.T) {
++	c, schema := fixture(t)
++	query(t, c, `create table events (id int, day date)
++with (storage_type=astore) partition by range(day) (
++partition before_2026 values less than ('2026-01-01'),
++partition later values less than (maxvalue))`)
++	tables, err := engine.Tables(context.Background(), c, []string{schema})
++	if err != nil {
++		t.Fatal(err)
++	}
++	found := 0
++	for _, table := range tables {
++		if table.Name == "events" && table.Kind == "p" {
++			found++
++		}
++		if table.Name == "before_2026" || table.Name == "later" {
++			t.Errorf("partition listed as table: %s", table.Name)
++		}
++	}
++	if found != 1 {
++		t.Fatalf("partition parent listed %d times", found)
++	}
++	def, err := engine.DDL(context.Background(), c, schema, "events")
++	if err != nil || !strings.Contains(strings.ToLower(def), "partition by range") {
++		t.Fatalf("partition DDL %q: %v", def, err)
++	}
++}
+diff --git a/internal/db/gaussdb/rows.go b/internal/db/gaussdb/rows.go
+new file mode 100644
+index 0000000000..052d5c7120
+--- /dev/null
++++ b/internal/db/gaussdb/rows.go
+@@ -0,0 +1,100 @@ func (c *Conn) Exec(ctx context.Context, sql string, maxRows int) ([]db.Result, 
++package gaussdb
++
++import (
++	"context"
++	"time"
++
++	"github.com/HuaweiCloudDeveloper/gaussdb-go/gaussdbconn"
++	"github.com/jackc/pgx/v5/pgtype"
++
++	"github.com/kackerx/sqlmux/internal/db"
++)
++
++var types = pgtype.NewMap()
++
++func (c *Conn) Exec(ctx context.Context, sql string, maxRows int) ([]db.Result, error) {
++	if c.Closed() {
++		return nil, errClosed
++	}
++	var out []db.Result
++	start := time.Now()
++	mrr := c.pg.Exec(ctx, sql)
++	for mrr.NextResult() {
++		r, err := readResult(mrr.ResultReader(), maxRows, start)
++		if err != nil {
++			mrr.Close()
++			return out, err
++		}
++		out = append(out, r)
++		start = time.Now()
++	}
++	return out, mrr.Close()
++}
++
++func (c *Conn) Query(ctx context.Context, sql string, args ...db.Val) (db.Result, error) {
++	if c.Closed() {
++		return db.Result{}, errClosed
++	}
++	params := make([][]byte, len(args))
++	for i, a := range args {
++		if !a.Null {
++			params[i] = []byte(a.S)
++		}
++	}
++	return readResult(c.pg.ExecParams(ctx, sql, params, nil, nil, nil), 0, time.Now())
++}
++
++func (c *Conn) Stream(ctx context.Context, sql string, head func([]db.Col) error, row func([]db.Val) error) error {
++	if c.Closed() {
++		return errClosed
++	}
++	ctx, cancel := context.WithCancel(ctx)
++	defer cancel()
++	_, err := each(c.pg.ExecParams(ctx, sql, nil, nil, nil, nil), cancel, head, func() bool { return true }, row)
++	return err
++}
++
++func readResult(rr *gaussdbconn.ResultReader, maxRows int, start time.Time) (db.Result, error) {
++	var r db.Result
++	tag, err := each(rr, nil, func(cols []db.Col) error { r.Cols = cols; return nil }, db.Capped(&r, maxRows),
++		func(vals []db.Val) error { r.Rows = append(r.Rows, vals); return nil })
++	r.Tag, r.Affected, r.Took = tag.String(), tag.RowsAffected(), time.Since(start)
++	return r, err
++}
++
++// Every value stays in the server's text representation, including numeric
++// scale, JSON whitespace and NULL. Draining capped results preserves writes.
++func each(rr *gaussdbconn.ResultReader, stop func(), head func([]db.Col) error, want func() bool, row func([]db.Val) error) (gaussdbconn.CommandTag, error) {
++	var cols []db.Col
++	for _, f := range rr.FieldDescriptions() {
++		col := db.Col{Name: f.Name}
++		if t, ok := types.TypeForOID(f.DataTypeOID); ok {
++			col.Type = t.Name
++		}
++		cols = append(cols, col)
++	}
++	err := head(cols)
++	if err != nil && len(cols) == 0 {
++		if _, cerr := rr.Close(); cerr != nil {
++			return gaussdbconn.CommandTag{}, cerr
++		}
++	}
++	for err == nil && rr.NextRow() {
++		if !want() {
++			continue
++		}
++		vals := make([]db.Val, len(cols))
++		for i, v := range rr.Values() {
++			vals[i] = db.Val{S: string(v), Null: v == nil}
++		}
++		err = row(vals)
++	}
++	if err != nil {
++		if stop != nil {
++			stop()
++		}
++		_, _ = rr.Close()
++		return gaussdbconn.CommandTag{}, err
++	}
++	return rr.Close()
++}
+diff --git a/internal/db/gaussdb/save_test.go b/internal/db/gaussdb/save_test.go
+new file mode 100644
+index 0000000000..7a9873652a
+--- /dev/null
++++ b/internal/db/gaussdb/save_test.go
+@@ -0,0 +1,59 @@ func TestSaveUpdatesInsertsDeletesAndRejectsStaleRows(t *testing.T) {
++//go:build integration
++
++package gaussdb
++
++import (
++	"context"
++	"errors"
++	"testing"
++
++	"github.com/kackerx/sqlmux/internal/db"
++)
++
++func TestSaveUpdatesInsertsDeletesAndRejectsStaleRows(t *testing.T) {
++	c, schema := fixture(t)
++	ctx := context.Background()
++	w := db.NewWorker(c)
++	ch := db.Changes{
++		Deletes: [][]string{{"2"}},
++		Updates: []db.Row{{Key: []string{"1"}, Cols: []db.Change{{Name: "note", Old: db.Val{S: "before"}, Val: db.Val{S: "after"}}}}},
++		Inserts: [][]db.Change{{{Name: "id", Val: db.Val{S: "3"}}, {Name: "code", Val: db.Val{S: "third"}}}},
++	}
++	if failed, tx, err := db.Save(ctx, w, engine, schema, "items", []string{"id"}, ch, false); err != nil || tx != 'I' {
++		t.Fatalf("save statement %d, tx %c: %v", failed, tx, err)
++	}
++	page, _, err := db.Page(ctx, c, engine, db.Query{Schema: schema, Table: "items", Key: []string{"id"}, Limit: 10})
++	if err != nil || len(page.Rows) != 2 || page.Rows[0][3].S != "after" || page.Rows[1][0].S != "3" {
++		t.Fatalf("saved page %+v: %v", page, err)
++	}
++	// Another writer changed the old cell. The batch's preceding delete must
++	// roll back together with the conflicting update.
++	stale := db.Changes{Deletes: [][]string{{"3"}}, Updates: ch.Updates}
++	if _, _, err := db.Save(ctx, w, engine, schema, "items", []string{"id"}, stale, false); !errors.Is(err, db.ErrStale) {
++		t.Fatalf("stale save %v", err)
++	}
++	if got := query(t, c, "select count(*) from "+engine.Quote(schema, "items")).Rows[0][0].S; got != "2" {
++		t.Errorf("partial batch committed: %s rows", got)
++	}
++}
++
++func TestManualSaveStaysUncommittedUntilRollback(t *testing.T) {
++	c, schema := fixture(t)
++	ctx := context.Background()
++	w := db.NewWorker(c)
++	ch := db.Changes{Updates: []db.Row{{Key: []string{"1"}, Cols: []db.Change{{Name: "note", Old: db.Val{S: "before"}, Val: db.Val{S: "manual"}}}}}}
++	if _, tx, err := db.Save(ctx, w, engine, schema, "items", []string{"id"}, ch, true); err != nil || tx != 'T' {
++		t.Fatalf("manual save tx %c: %v", tx, err)
++	}
++	reader := connect(t, true)
++	sql := "select note from " + engine.Quote(schema, "items") + " where id = 1"
++	if got := query(t, reader, sql).Rows[0][0].S; got != "before" {
++		t.Fatalf("manual write visible before commit: %q", got)
++	}
++	if _, err := db.End(ctx, c, "rollback"); err != nil {
++		t.Fatal(err)
++	}
++	if got := query(t, c, sql).Rows[0][0].S; got != "before" {
++		t.Errorf("rollback retained %q", got)
++	}
++}
+diff --git a/internal/db/gaussdb/transport_test.go b/internal/db/gaussdb/transport_test.go
+new file mode 100644
+index 0000000000..82e0eee0b5
+--- /dev/null
++++ b/internal/db/gaussdb/transport_test.go
+@@ -0,0 +1,115 @@ func TestExecDrainsCappedResultsAndKeepsFollowingStatements(t *testing.T) {
++//go:build integration
++
++package gaussdb
++
++import (
++	"context"
++	"errors"
++	"testing"
++	"time"
++
++	"github.com/kackerx/sqlmux/internal/db"
++)
++
++func TestExecDrainsCappedResultsAndKeepsFollowingStatements(t *testing.T) {
++	c := connect(t, false)
++	results, err := c.Exec(context.Background(), "select generate_series(1, 4) as n; select 'last' as marker", 2)
++	if err != nil || len(results) != 2 {
++		t.Fatalf("results %+v: %v", results, err)
++	}
++	if len(results[0].Rows) != 2 || !results[0].Truncated || results[1].Rows[0][0].S != "last" {
++		t.Errorf("capped results %+v", results)
++	}
++}
++
++func TestStreamCancellationLeavesConnectionUsable(t *testing.T) {
++	c := connect(t, false)
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	rows := 0
++	err := c.Stream(ctx, "select generate_series(1, 100000000)", func(cols []db.Col) error {
++		if len(cols) != 1 || cols[0].Type != "int4" {
++			t.Errorf("columns %+v", cols)
++		}
++		return nil
++	}, func([]db.Val) error {
++		rows++
++		if rows == 17 {
++			cancel()
++		}
++		return nil
++	})
++	if err == nil {
++		t.Fatal("stream ran to completion after cancellation")
++	}
++	if got := query(t, c, "select 42").Rows[0][0].S; got != "42" {
++		t.Errorf("after cancellation %q", got)
++	}
++}
++
++func TestStreamCallbackFailureReturnsOriginalError(t *testing.T) {
++	c := connect(t, false)
++	want := errors.New("export destination closed")
++	err := c.Stream(context.Background(), "select generate_series(1, 100000000)",
++		func([]db.Col) error { return nil }, func([]db.Val) error { return want })
++	if !errors.Is(err, want) {
++		t.Fatalf("stream error %v", err)
++	}
++	query(t, c, "select 1")
++}
++
++func TestQueryTimeoutCancelsServerWork(t *testing.T) {
++	c := connect(t, false)
++	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
++	defer cancel()
++	_, err := c.Query(ctx, "select pg_sleep(30)")
++	if err == nil || engine.ErrorOf(err).Code != "57014" {
++		t.Fatalf("server cancellation %v", err)
++	}
++	query(t, c, "select 1")
++}
++
++func TestReadOnlyConnectionRejectsServerWrites(t *testing.T) {
++	writer, schema := fixture(t)
++	reader := connect(t, true)
++	_, err := reader.Query(context.Background(), "insert into "+engine.Quote(schema, "items")+"(id, code) values (9, 'forbidden')")
++	if err == nil || engine.ErrorOf(err).Code != "25006" {
++		t.Fatalf("read-only insert %v", err)
++	}
++	if got := query(t, writer, "select count(*) from "+engine.Quote(schema, "items")).Rows[0][0].S; got != "2" {
++		t.Errorf("read-only connection changed the table: %s rows", got)
++	}
++}
++
++func TestFailedTransactionRollsBackAndRecovers(t *testing.T) {
++	c := connect(t, false)
++	query(t, c, "begin")
++	if c.TxStatus() != 'T' {
++		t.Fatalf("after begin %c", c.TxStatus())
++	}
++	_, err := c.Query(context.Background(), "select 1/0")
++	if err == nil || c.TxStatus() != 'E' {
++		t.Fatalf("failed transaction %c: %v", c.TxStatus(), err)
++	}
++	if tag, err := db.End(context.Background(), c, "rollback"); err != nil || tag != "ROLLBACK" || c.TxStatus() != 'I' {
++		t.Fatalf("rollback %q, status %c: %v", tag, c.TxStatus(), err)
++	}
++	query(t, c, "select 1")
++}
++
++func TestSchemaSwitchAndReadOnlyQuickQuery(t *testing.T) {
++	c, schema := fixture(t)
++	query(t, c, "set search_path to public")
++	ctx := context.Background()
++	if err := engine.UseSchema(ctx, c, schema, "public"); err != nil {
++		t.Fatal(err)
++	}
++	if got := query(t, c, "select current_schema()").Rows[0][0].S; got != schema {
++		t.Fatalf("current schema %q", got)
++	}
++	w := db.NewWorker(c)
++	r, err := engine.Quick(ctx, w, "select * from items order by id", schema, 1)
++	if err != nil || len(r.Rows) != 1 || !r.Truncated || c.TxStatus() != 'I' {
++		t.Fatalf("quick query %+v, status %c: %v", r, c.TxStatus(), err)
++	}
++}
+diff --git a/internal/i18n/en.go b/internal/i18n/en.go
+index d24ef5e1c4..5cc9afd133 100644
+--- a/internal/i18n/en.go
++++ b/internal/i18n/en.go
+@@ -51,7 +51,7 @@
+ 	"关闭键位帮助":     "Close key help",
+ 	"再按一次 %s 退出": "Press %s again to quit",
+ 	"切换 schema":  "Switch schema",
+-	"不认识的 URL %s://：只有 postgres://、mysql://、redis:// 和 SQLite 的文件": "Unknown URL %s://: only postgres://, mysql://, redis:// and SQLite files",
++	"不认识的 URL %s://：支持 postgres://、gaussdb://、opengauss://、mysql://、redis:// 和 SQLite 的文件": "Unknown URL %s://: supported URLs are postgres://, gaussdb://, opengauss://, mysql://, redis:// and SQLite files",
+ 	"%s: 不认识的键 %s": "%s: unknown key(s) %s",
+ 	"没有历史":         "No history",
+ 	"搜索中…":         "Searching…",
+@@ -510,23 +510,23 @@
+ 	"default_connection：没有名为 %s 的连接": "default_connection: no connection %s",
+ 
+ 	// Configuration: what is wrong in connections.toml, config.toml, themes
+-	"%s = %q：颜色要写成 #rrggbb":                                    "%s = %q: write a color as #rrggbb",
+-	"%s: 没有名为 %q 的连接，已有：%s":                                    "%s: no connection named %q; there are: %s",
+-	"%s: 第 %d 个连接：%s":                                          "%s: connection %d: %s",
+-	"%s: 里面没有 [[connection]]":                                  "%s: no [[connection]] in it",
+-	"%s：颜色要写成字符串 \"#rrggbb\"":                                  "%s: write a color as a string \"#rrggbb\"",
+-	"engine = %q：只能是 postgres、mysql、sqlite、redis、mssql 或 exec": "engine = %q: only postgres, mysql, sqlite, redis, mssql or exec",
+-	"dialect = %q：exec 只认 postgres 和 redis":                    "dialect = %q: exec takes postgres or redis",
+-	"exec 的 command 是 argv 数组，里面要有 %s":                         "command of exec is an argv array with %s in it",
+-	"dialect 和 command 只对 exec 连接有用":                           "dialect and command are for an exec connection only",
+-	"command 里要有 {sql}":                                        "command needs {sql}",
+-	"$%d 没有对应的参数":                                              "$%d has no argument",
+-	"命令的输出不是约定的 JSON：%s":                                       "The command did not print the JSON it should: %s",
+-	"delimiter 只对 redis 连接有用":                                  "delimiter is for redis connections only",
+-	"db 要是从 0 起的数字":                                            "db must be a number from 0",
+-	"这个连接的命令没有格式化":                                             "the commands of this connection have no formatting",
+-	"这个连接没有快速 SQL":                                             "this connection has no quick SQL",
+-	"快速 SQL 是只读的：这条是写语句":                                       "quick SQL is read only: this statement writes",
++	"%s = %q：颜色要写成 #rrggbb":                                            "%s = %q: write a color as #rrggbb",
++	"%s: 没有名为 %q 的连接，已有：%s":                                            "%s: no connection named %q; there are: %s",
++	"%s: 第 %d 个连接：%s":                                                  "%s: connection %d: %s",
++	"%s: 里面没有 [[connection]]":                                          "%s: no [[connection]] in it",
++	"%s：颜色要写成字符串 \"#rrggbb\"":                                          "%s: write a color as a string \"#rrggbb\"",
++	"engine = %q：只能是 postgres、gaussdb、mysql、sqlite、redis、mssql 或 exec": "engine = %q: only postgres, gaussdb, mysql, sqlite, redis, mssql or exec",
++	"dialect = %q：exec 只认 postgres 和 redis":                            "dialect = %q: exec takes postgres or redis",
++	"exec 的 command 是 argv 数组，里面要有 %s":                                 "command of exec is an argv array with %s in it",
++	"dialect 和 command 只对 exec 连接有用":                                   "dialect and command are for an exec connection only",
++	"command 里要有 {sql}":                                                "command needs {sql}",
++	"$%d 没有对应的参数":                                                      "$%d has no argument",
++	"命令的输出不是约定的 JSON：%s":                                               "The command did not print the JSON it should: %s",
++	"delimiter 只对 redis 连接有用":                                          "delimiter is for redis connections only",
++	"db 要是从 0 起的数字":                                                    "db must be a number from 0",
++	"这个连接的命令没有格式化":                                                     "the commands of this connection have no formatting",
++	"这个连接没有快速 SQL":                                                     "this connection has no quick SQL",
++	"快速 SQL 是只读的：这条是写语句":                                               "quick SQL is read only: this statement writes",
+ 	"键不存在":               "no such key",
+ 	"(空)":                "(empty)",
+ 	"已扫描 %d / %s，用 / 过滤": "scanned %d of %s, filter with /",
+@@ -642,8 +642,8 @@
+ 	"选择库…":           "Pick databases…",
+ 	"选择 schema…":     "Pick schemas…",
+ 	"库":              "Databases",
+-	"databases 只对 postgres 和 mssql 连接有用":                 "databases is for postgres and mssql connections",
+-	"databases 和 schemas 只对 postgres、mysql 和 mssql 连接有用": "databases and schemas are for postgres, mysql and mssql connections",
++	"databases 只对 postgres、gaussdb 和 mssql 连接有用":                 "databases is for postgres, gaussdb and mssql connections",
++	"databases 和 schemas 只对 postgres、gaussdb、mysql 和 mssql 连接有用": "databases and schemas are for postgres, gaussdb, mysql and mssql connections",
+ 	"加宽这一列":  "Widen this column",
+ 	"收窄这一列":  "Narrow this column",
+ 	"列宽回到自动": "Column widths back to automatic",
+diff --git a/internal/ui/form.go b/internal/ui/form.go
+index f87712ba56..014554ed71 100644
+--- a/internal/ui/form.go
++++ b/internal/ui/form.go
+@@ -156,18 +156,7 @@ func (fm Form) drawIn(f *Frame, area uv.Rectangle, focus bool) uv.Position {
+ 				f.Text(r.Min.X, y, r.Max.X, fd.Example, in)
+ 			}
+ 		case FormSegments:
+-			x := r.Min.X
+-			for j, ch := range fd.Choices {
+-				st := uv.Style{Fg: th.Dim, Bg: th.Sep}
+-				if j == fd.On {
+-					st = uv.Style{Fg: th.Fg, Bg: th.Select}
+-				}
+-				if j > 0 {
+-					x = f.Text(x, y, r.Max.X, "│", dim)
+-				}
+-				f.Region(uv.Rect(x, y, Width(ch)+2, 1), Target{Kind: KindSegment, Pane: i, I: j})
+-				x = f.Text(x, y, r.Max.X, " "+ch+" ", st)
+-			}
++			fd.drawSegments(f, r, i)
+ 		case FormCheck:
+ 			mark := "[ ]"
+ 			if fd.On == 1 {
+diff --git a/internal/ui/formsegments.go b/internal/ui/formsegments.go
+new file mode 100644
+index 0000000000..f0164c2815
+--- /dev/null
++++ b/internal/ui/formsegments.go
+@@ -0,0 +1,34 @@ func (fd FormField) drawSegments(f *Frame, r uv.Rectangle, field int) {
++package ui
++
++import uv "github.com/charmbracelet/ultraviolet"
++
++// Keep the selected engine visible when its siblings no longer fit. The
++// original choice index is kept in hit targets, so mouse and keyboard agree.
++func (fd FormField) drawSegments(f *Frame, r uv.Rectangle, field int) {
++	start, used := 0, 0
++	for j, ch := range fd.Choices {
++		used += Width(ch) + 3
++		if j == fd.On {
++			break
++		}
++	}
++	for start < fd.On && used > r.Dx() {
++		used -= Width(fd.Choices[start]) + 3
++		start++
++	}
++	dim := uv.Style{Fg: f.Theme.Dim, Bg: f.Theme.PaneBg}
++	x := r.Min.X
++	for j := start; j < len(fd.Choices) && x < r.Max.X; j++ {
++		ch := fd.Choices[j]
++		st := uv.Style{Fg: f.Theme.Dim, Bg: f.Theme.Sep}
++		if j == fd.On {
++			st = uv.Style{Fg: f.Theme.Fg, Bg: f.Theme.Select}
++		}
++		if j > start {
++			x = f.Text(x, r.Min.Y, r.Max.X, "│", dim)
++		}
++		end := min(x+Width(ch)+2, r.Max.X)
++		f.Region(uv.Rect(x, r.Min.Y, end-x, 1), Target{Kind: KindSegment, Pane: field, I: j})
++		x = f.Text(x, r.Min.Y, r.Max.X, " "+ch+" ", st)
++	}
++}
+diff --git a/internal/ui/formsegments_test.go b/internal/ui/formsegments_test.go
+new file mode 100644
+index 0000000000..31d9266dae
+--- /dev/null
++++ b/internal/ui/formsegments_test.go
+@@ -0,0 +1,35 @@ func TestSelectedFormSegmentRemainsVisibleAndClickable(t *testing.T) {
++package ui
++
++import (
++	"strings"
++	"testing"
++
++	uv "github.com/charmbracelet/ultraviolet"
++)
++
++func TestSelectedFormSegmentRemainsVisibleAndClickable(t *testing.T) {
++	choices := []string{"postgres", "mysql", "sqlite", "redis", "mssql", "gaussdb"}
++	for _, width := range []int{80, 120} {
++		for selected, name := range choices {
++			f := NewFrame(width, 15, TokyonightStorm)
++			form := Form{Save: "Save", Cancel: "Cancel", Fields: []FormField{
++				{Label: "engine", Kind: FormSegments, Choices: choices, On: selected},
++			}}
++			ConnManager{Title: "Connections", Rows: []ConnRow{{Name: "new"}}, Form: form}.Draw(f, f.Bounds())
++			if !strings.Contains(f.String(), " "+name+" ") {
++				t.Fatalf("%d columns: selected %s is clipped:\n%s", width, name, f.String())
++			}
++			found := false
++			for _, hit := range f.Hits {
++				if hit.Target.Kind == KindSegment && hit.Target.I == selected {
++					point := uv.Pos(hit.Rect.Min.X+1, hit.Rect.Min.Y)
++					target, ok := HitAt(f.Hits, point)
++					found = ok && target.Kind == KindSegment && target.I == selected
++				}
++			}
++			if !found {
++				t.Errorf("%d columns: selected %s cannot be clicked", width, name)
++			}
++		}
++	}
++}
+diff --git a/specs/design/00-overview.md b/specs/design/00-overview.md
+index c42d7f3fb7..0f9f371c77 100644
+--- a/specs/design/00-overview.md
++++ b/specs/design/00-overview.md
+@@ -97,7 +97,7 @@ ## 4. 目录结构
+ │  ├─ keymap/                 键位记法解析（含 keymaps.toml 的键位语法 ParseKeys，M13 F13.15 起）、作用域 trie、次数前缀、用户映射、冲突检测、提示查询、default.toml（embed）；不 import config / ui
+ │  ├─ editor/                 vim 编辑器的纯逻辑，不 import ui 和 bubbletea；testdata/ 放 nvim 差分用例
+ │  ├─ sqlkit/                 词法扫描、分句、读写判定、自动 LIMIT、WHERE 拼接校验、补全上下文、格式化（内嵌 sql-formatter）
+-│  ├─ db/                     Conn / Engine / Source 接口、Worker、postgres/、mysql/、sqlite/（M14 F14.1，modernc.org/sqlite，纯 Go）、mssql/（M18 F18.6，microsoft/go-mssqldb，纯 Go）、redis/（M16，go-redis v9：连接、SCAN 树、键 tab 的数据源、控制台的命令词法与 COMMAND DOCS 补全）、exec/（M17 F17.7：外部执行器，子进程当连接，§8.8）、catalog 查询
++│  ├─ db/                     Conn / Engine / Source 接口、Worker、postgres/、gaussdb/（GaussDB / openGauss 原生认证与 catalog，§8.9）、mysql/、sqlite/（M14 F14.1，modernc.org/sqlite，纯 Go）、mssql/（M18 F18.6，microsoft/go-mssqldb，纯 Go）、redis/（M16，go-redis v9：连接、SCAN 树、键 tab 的数据源、控制台的命令词法与 COMMAND DOCS 补全）、exec/（M17 F17.7：外部执行器，子进程当连接，§8.8）、catalog 查询
+ │  ├─ config/                 config / connections / state / 布局文件的读写与 XDG 路径
+ │  └─ i18n/                   界面文案的翻译：T(中文, 参数…)，en 表
+ ├─ e2e/                       tester 的黑盒测试脚本，从 e2e 分支合并进来
+diff --git a/specs/design/08-data.md b/specs/design/08-data.md
+index dd3d756ac0..b0b5237ae9 100644
+--- a/specs/design/08-data.md
++++ b/specs/design/08-data.md
+@@ -176,6 +176,14 @@ ### 8.7 键值引擎（Redis，M16）
+   行的身份：hash 的 field、set 的 member、list 的 index、zset 的 member、stream 的 ID。写回前的乐观校验同 §10.3：`MULTI` 之前 `WATCH k`，`WATCH` 之后、`MULTI` 之前把要改的格子读回来逐格比 `Old`（WATCH 管不到读页之后、保存之前别人的改动），不符或 `EXEC` 返回 nil（键在 WATCH 后被别人改过）都报「行数据已变化」并重载。没有事务模式切换：Redis 的 MULTI 不是交互式事务，`Conn.Manual` 对它恒为自动。新增行走现有的新增行操作（`HSET` / `SADD` / `ZADD` / `RPUSH`）；string 和 JSON 没有新增行。格子里的 JSON 不按格高亮（`ui.Grid` 按列着色，按格要改绘制和缓存；F16.3 时定不做，第二轮候选），`e` 开值编辑器看排版后的。「以 JSON 查看」（`key.json`，§7.6 的 JSON 视图）：hash 整体变 object、list / set 变数组、zset 变 `[member, score]` 数组、stream 变 `{id, fields}` 数组，只读看，复制为 JSON 同一份。DDL 查看是重建它的命令（`redis.Key.Rebuild`，不在 `Source` 里：`HSET k f v …`、`SET k v EX ttl`，长的截到 `load_all` 并注明），复用 ddlview。二进制值按 §8.1 的占位符。布局文件记 `connection`、`db`、`key`（§14）。导出（`Each`）在 HSCAN / SSCAN 类型上是整键循环，按 `[redis] scan_keys` 同样的预算截断并提示，不另开配置。命令面板的「表」范围在 Redis 连接上这一版不列键（要 SCAN、有预算问题），键只从树和侧栏 `/` 进。
+ - **已知上限**：控制台里手敲 `SELECT n` 只改这条 Main 的 db，标题和树不跟着变（`ponytail:` 标出）；HSCAN / SSCAN 翻页只能向前、计数是 `-1`、本地排序不可用；stream 的字段并集按当前页算；`WATCH` 粒度是整个键，别人改了同一个 hash 的另一个 field 也会报「行数据已变化」；RedisJSON 只在装了模块的服务端上（`MODULE LIST`，没有时 JSON 类型不出现）。
+ 
++### 8.9 GaussDB / openGauss
++
++- `engine = "gaussdb"` 是独立的 SQL 引擎，使用 `github.com/HuaweiCloudDeveloper/gaussdb-go` 的低层 `gaussdbconn`，支持驱动提供的高斯 SHA256、MD5 和 SCRAM 认证、TLS、客户端证书与 SSH 拨号；不把高斯 SHA256 当作 PostgreSQL SCRAM。SM3 认证不在该驱动的能力范围内。
++- DSN 接受 `gaussdb://`、`opengauss://`、`postgres://`、`postgresql://` 和驱动的关键字形式；URL 统一成 `gaussdb://` 后交给驱动解析。命令行通过 `gaussdb://` / `opengauss://` 选中该引擎。JDBC URL 去掉 `jdbc:`，在配置中显式写 `engine = "gaussdb"`。表单默认端口为 8000，实际实例的端口由用户填写。
++- 连接模型、文本值、流式导出、只读 startup 参数、取消、事务状态和断线重连沿用 §8.1–§8.3 的契约。SQL 方言为 PG，复用公共分页、保存、乐观并发检查、自动/手动事务与 PostgreSQL 的 schema 切换、快速 SQL；错误转换使用原生驱动的 `GaussdbError`。
++- 元数据使用高斯系统表：表的分区属性来自 `pg_class.parttype`，生成列来自 `pg_attrdef.adgencol`，键按数组下标保持原始顺序，避免依赖 PostgreSQL 的 `relispartition`、`attgenerated` 或 `WITH ORDINALITY`。表 DDL 使用 `pg_get_tabledef`，函数定义读取 `pg_get_functiondef` 返回记录中的 `definition`；视图、物化视图、外键、唯一索引、枚举、函数与序列均接入现有对象树。按实例提供的 catalog 字段识别 identity 和 INCLUDE 键列数量，不能把生成列或 INCLUDE 列当作可写值或行标识。
++- GaussDB 指 PostgreSQL 协议产品；GaussDB(for MySQL) 使用现有 MySQL 引擎。测试通过 `SQLMUX_TEST_GAUSSDB` 指定独立测试实例，写测试创建并清理自己的 schema；openGauss 的实测结果与商业 GaussDB 的实测结果分开记录。
++
+ ### 8.8 外部执行器（exec，M17 F17.7 / F17.8）
+ 
+ 本地连不上、只有一条命令行能到的库（用户公司的 prod：PG 经 `doraemonctl exec db` 借 pgAdmin 的 Query Tool 面板，Redis 经 `doraemonctl exec redis` 走 metaknow 的内部接口），用引擎 `exec` 接进来：`dialect` 定 SQL 方言或 Redis，`command` 是 argv 模板。

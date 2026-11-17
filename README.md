@@ -4,7 +4,7 @@ AzumiA personal nixpkgs-like package source.
 
 ## Home Manager 使用
 
-这个 flake 提供了 `ghosttyfetch`、`toofan` 等 package、overlay，以及 Home Manager / NixOS module。
+这个 flake 提供了 `ghosttyfetch`、`pdmaner`、`sqlmux`、`toofan` package 和 overlay，以及 Home Manager / NixOS module。
 
 ### 1. 添加 flake input
 
@@ -206,3 +206,42 @@ nix run github:azumia-azu/azumia-nixpkgs#pdmaner
 ```
 
 上游发布源码不包含 `package-lock.json`，仓库内的 `overlays/pdmaner-package-lock.json` 用于固定 npm 依赖，更新 `pdmaner` 时需要同步重新生成。
+
+## sqlmux 使用
+
+`sqlmux` 是支持会话、分屏和表格编辑的终端数据库客户端，当前版本为 `0.10.0`。
+
+源码来自上游 `release/v0.10.0` 分支，固定在提交 `3def4157573fb37cae0bd1b15ffd40b5117ef680`。上游的 `v0.10.0` tag 指向另一个提交。构建时会应用仓库内的 `overlays/sqlmux/changes.patch`，加入 GaussDB / openGauss 支持；该文件是指定 `changes.patch` 的原样副本。
+
+### 1. 直接构建或运行
+
+```sh
+nix build github:azumia-azu/azumia-nixpkgs#sqlmux
+nix run github:azumia-azu/azumia-nixpkgs#sqlmux -- --version
+```
+
+### 2. Home Manager 启用
+
+按前面的说明添加 overlay，并导入 `inputs.azumia-nixpkgs.homeManagerModules.sqlmux`：
+
+```nix
+{
+  programs.sqlmux.enable = true;
+}
+```
+
+启用后会将 `sqlmux` 加入 `home.packages`。
+
+### 3. NixOS 启用
+
+添加 overlay，并导入 `inputs.azumia-nixpkgs.nixosModules.sqlmux`：
+
+```nix
+{
+  programs.sqlmux.enable = true;
+}
+```
+
+启用后会将 `sqlmux` 加入 `environment.systemPackages`。两个模块都提供 `programs.sqlmux.package` 选项，可覆盖默认的 `pkgs.sqlmux`。
+
+模块只安装程序，连接和运行时配置由 sqlmux 在 `~/.config/sqlmux` 下维护。GaussDB / openGauss 连接使用 `engine = "gaussdb"`，或直接传入 `gaussdb://` / `opengauss://` URL。

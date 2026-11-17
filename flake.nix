@@ -36,6 +36,7 @@
             inherit (pkgs)
               ghosttyfetch
               pdmaner
+              sqlmux
               toofan
               ;
           };
